@@ -25,3 +25,6 @@ data/
 *.db
 *.db-wal
 *.db-shm
+
+# design reference screenshots (local only)
+ui/
