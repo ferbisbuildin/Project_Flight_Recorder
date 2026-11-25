@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 import os
+import threading
 from typing import Literal
 from urllib.parse import urlparse
 
@@ -14,7 +15,7 @@ from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
-from .config import settings
+from .config import ROOT, settings
 from .llm import LLMError
 from .service import RunBusy, Service
 
@@ -29,11 +30,22 @@ def advance_later(run_id: str) -> None:
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    # After a restart, pick up runs that were mid-flight (their lease expires if the old process died).
-    for r in svc.store.list_runs():
-        if r["status"] == "running" and r["mode"] == "live" and svc.cfg.llm_api_key:
-            advance_later(r["id"])
+    # Recorded traces ship in runs/final/: load them so a fresh clone can view and replay with no LLM key.
+    svc.import_traces(Path(os.environ.get("TRACES_DIR", ROOT / "runs" / "final")))
+    stop = threading.Event()
+
+    def janitor():  # every 30s: resume live runs whose worker died (crash, restart) once their lease has expired
+        while not stop.wait(30):
+            if svc.cfg.llm_api_key:
+                for rid in svc.stalled():
+                    advance_later(rid)
+
+    if svc.cfg.llm_api_key:
+        for rid in svc.stalled():
+            advance_later(rid)
+    threading.Thread(target=janitor, daemon=True, name="janitor").start()
     yield
+    stop.set()
     pool.shutdown(wait=False, cancel_futures=True)
 
 

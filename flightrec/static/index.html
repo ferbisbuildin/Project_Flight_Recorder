@@ -197,6 +197,10 @@ const STATUS = {succeeded: "Succeeded", failed: "Failed", stopped: "Stopped (bud
                 rejected: "Rejected", approved: "Approved", pending: "Pending", changes_requested: "Changes requested",
                 cancelled: "Cancelled"};
 const inr = usd => "₹" + (usd * (state.usdInr || 84)).toFixed(2);
+// Headline status of a run: once a person resolves an escalation, that is what matters operationally.
+const runPill = r => r.resolution
+  ? `<span class="pill s-ok" title="${esc(r.resolution)}"><span class="dot"></span>Resolved by you</span>`
+  : pill(r.status);
 const pill = s => `<span class="pill s-${esc(s)}"><span class="dot"></span>${esc(STATUS[s] || s)}</span>`;
 const api = async (path, opts = {}) => {
   const r = await fetch(path, {headers: {"content-type": "application/json"}, ...opts});
@@ -265,10 +269,11 @@ const state = {runs: [], filter: "runs", sel: new URLSearchParams(location.hash.
 function renderRuns() {
   const f = state.filter;
   const runs = state.runs.filter(r => f === "replays" ? r.mode === "replay"
-    : r.mode === "live" && (f === "runs" || ["awaiting_approval", "failed", "needs_human", "stopped"].includes(r.status)));
+    : r.mode === "live" && (f === "runs" || (!r.resolution && ["awaiting_approval", "failed", "needs_human", "stopped"].includes(r.status))));
   $("runs").innerHTML = runs.map(r => `
     <div class="run ${r.id === state.sel ? "sel" : ""}" data-run="${esc(r.id)}">
-      <div class="r1"><b>${esc(r.task_id)}</b>${r.mode === "replay" ? `<span class="tag">REPLAY</span>` : ""}${pill(r.status)}</div>
+      <div class="r1"><b>${esc(r.task_id)}</b>${r.mode === "replay" ? `<span class="tag">REPLAY</span>` : ""}${runPill(r)}</div>
+      ${r.resolution ? `<div class="r2"><span>agent ended: ${esc(STATUS[r.status] || r.status)}</span></div>` : ""}
       <div class="r2"><span>${r.steps} steps</span><span>${r.active_seconds.toFixed(0)}s</span>
         <span>${(r.tokens_in + r.tokens_out).toLocaleString()} tok · ${inr(r.cost)}</span></div>
       <div class="r2"><span>${r.mode === "replay" ? "check of " + esc(r.replay_of) : "started " + clock(r.created_at)}</span></div>
@@ -296,7 +301,7 @@ function renderMid() {
       <div class="avatar">${esc(initials)}</div>
       <div class="who"><b>${esc(r.task_id)} · ${esc(info.subject || r.goal)}</b>
         <span>${esc(info.name || "customer not loaded yet")} · ${esc(r.model)}${r.replay_of ? " · replay check of " + esc(r.replay_of) : ""}</span></div>
-      ${pill(r.status)}
+      ${runPill(r)}${r.resolution ? ` <span class="pill meta">agent ended: ${esc(STATUS[r.status] || r.status)}</span>` : ""}
       <span class="grow"></span>
       ${r.mode === "live" ? `<button class="btn" id="replay" ${busy ? "disabled" : ""}
          title="Re-run this trace with no LLM and no world calls, and confirm every step comes out identical">Verify replay</button>` : ""}
@@ -462,15 +467,16 @@ function escalationCard() {
   const after = steps.filter(s => s.kind === "handoff" || s.kind === "handled");
   const title = {needs_human: "The agent escalated this ticket", failed: "This run failed", stopped: "This run was stopped"}[r.status];
   return `<div class="card escalate">
-    <h3>${pill(r.status)} ${title}</h3>
+    <h3>${runPill(r)} ${r.resolution ? "Resolved" : title}</h3>
     <div class="why">${esc(r.summary || "")}</div>
     ${notes.length ? `<div class="label" style="margin-top:10px">Internal notes it left</div>${notes.map(n => `<pre>${esc(n)}</pre>`).join("")}` : ""}
     ${after.map(s => `<div class="kv"><dt>${s.kind === "handoff" ? "handed back" : "handled"}</dt><dd>${esc(s.data.guidance || s.data.note)}${s.data.follow_up ? ` → <a href="#run=${esc(s.data.follow_up)}" data-run="${esc(s.data.follow_up)}">follow-up run</a>` : ""}</dd></div>`).join("")}
+    ${r.resolution ? `<div class="banner s-ok" style="margin:10px 0 0"><b>Resolved</b><span>${esc(r.resolution)}</span></div>` : `
     <div class="label" style="margin-top:10px">What do you want to do?</div>
     <textarea rows="3" id="guidance" placeholder="Guidance for the agent, e.g. “Decline politely: only the account owner can request a refund on their payment.”"></textarea>
     <div class="row"><button class="btn primary" id="followup" title="Start a new run for this ticket with your guidance">Hand back to agent</button>
       <button class="btn" id="handled" title="You resolved it yourself; record a note">Mark handled by me</button></div>
-    <div class="hint">Hand back starts a follow-up run for the same ticket with the escalation and your guidance. Risky actions still need approval.</div>
+    <div class="hint">Hand back starts a follow-up run for the same ticket with the escalation and your guidance. Risky actions still need approval.</div>`}
   </div>`;
 }
 
@@ -502,6 +508,9 @@ function tick() {
 async function refreshRuns() {
   state.runs = await api("/api/runs");
   const pending = state.runs.filter(r => r.status === "awaiting_approval").length;
+  // keep the open run's headline in sync even when nothing else about it changed
+  const open = state.runs.find(r => r.id === state.sel);
+  if (open && state.detail && open.resolution !== state.detail.run.resolution) state.key = "";
   $("pending-pill").style.display = pending ? "" : "none";
   $("pending-n").textContent = `${pending} waiting for approval`;
   renderRuns();
@@ -509,7 +518,7 @@ async function refreshRuns() {
 async function refreshDetail() {
   if (!state.sel) return;
   const detail = await api(`/api/runs/${encodeURIComponent(state.sel)}`);
-  const key = JSON.stringify([detail.run.id, detail.run.status, detail.run.steps, detail.approvals.map(a => a.status)]);
+  const key = JSON.stringify([detail.run.id, detail.run.status, detail.run.steps, detail.run.resolution, detail.approvals.map(a => a.status)]);
   if (key === state.key) return;
   const fresh = !state.key.includes(detail.run.id);
   const atEnd = state.cursor >= state.events.length - 1;
@@ -562,7 +571,7 @@ document.addEventListener("click", async ev => {
     }
     case "handled": {
       try { await api(`/api/runs/${encodeURIComponent(state.sel)}/handled`, {method: "POST", body: JSON.stringify({guidance: $("guidance").value})});
-            toast("Recorded as handled."); state.key = ""; await refreshAll(); }
+            toast("Marked as resolved by you."); document.activeElement.blur(); state.key = ""; await refreshAll(); }
       catch (e) { toast(e.message); }
       break;
     }

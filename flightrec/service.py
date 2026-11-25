@@ -44,6 +44,10 @@ class Service:
             raise RunBusy("the kill switch is engaged; release it before starting runs")
         if model and model not in self.models:
             raise ValueError(f"model {model!r} is not allowed; choose one of {self.models}")
+        busy = [r["id"] for r in self.store.list_runs()
+                if r["task_id"] == task_id and r["mode"] == "live" and r["status"] in ("running", "awaiting_approval")]
+        if busy:  # two agents on one ticket is how a customer gets refunded twice
+            raise RunBusy(f"{task_id} already has an active run ({busy[0]}); finish or stop it first")
         return self.store.create_run(task_id, goal or f"Handle support ticket {task_id} end to end.", model or self.models[0])
 
     def advance(self, run_id: str) -> str:
@@ -65,15 +69,23 @@ class Service:
                 f"A previous run ({run_id}) ended '{old['status']}': {old['summary']}\n"
                 f"Its internal notes are on the ticket.\n\n"
                 f"Guidance from a Northwind support lead (trusted, follow it): {guidance.strip()}")
+        if old["resolution"]:
+            raise ValueError(f"already resolved: {old['resolution']}")
         new = self.create_live(old["task_id"], goal, old["model"] if old["model"] in self.models else None)
         self.store.add_step(run_id, "handoff", {"guidance": guidance.strip(), "follow_up": new})
+        self.store.update_run(run_id, resolution=f"handed back to the agent: follow-up run {new}")
         return new
 
     def mark_handled(self, run_id: str, note: str) -> None:
         """A person resolved an escalation themselves; recorded on the run (the agent's own status is unchanged)."""
-        if not self.store.get_run(run_id):
+        run = self.store.get_run(run_id)
+        if not run:
             raise KeyError(run_id)
-        self.store.add_step(run_id, "handled", {"note": note.strip() or "handled by a person"})
+        if run["resolution"]:
+            return  # already resolved: clicking twice changes nothing
+        note = note.strip() or "handled by a person"
+        self.store.add_step(run_id, "handled", {"note": note})
+        self.store.update_run(run_id, resolution=f"handled by a person: {note}")
 
     def decide(self, run_id: str, call_id: str, decision: bool | str, note: str = "") -> dict:
         if self.store.kill_state():
@@ -145,6 +157,24 @@ class Service:
                 self.store.decide(run_id, a["call_id"], a["status"], a["note"] or "")
         self.runner.advance(run_id, deps)
         return {"run_id": run_id, **compare(self.store, original_id, run_id)}
+
+    def import_traces(self, folder: Path) -> list[str]:
+        """Load exported traces (e.g. the committed runs/final/) into the store, skipping ones already present."""
+        loaded = []
+        for f in sorted(Path(folder).glob("T-*.json")):
+            try:
+                doc = json.loads(f.read_text(encoding="utf-8"))
+                if self.store.import_run(doc):
+                    loaded.append(doc["run"]["id"])
+            except (ValueError, KeyError, TypeError) as e:  # one bad file must not stop the viewer from starting
+                print(f"skipped trace {f.name}: {e}")
+        return loaded
+
+    def stalled(self) -> list[str]:
+        """Live runs marked running whose worker is gone (lease expired or never taken): pick them up again."""
+        now = time.time()
+        return [r["id"] for r in self.store.list_runs()
+                if r["mode"] == "live" and r["status"] == "running" and (r["lease_until"] or 0) < now]
 
     # ------------------------------------------------------------ export
     def export(self, run_ids: list[str], out: Path) -> list[Path]:

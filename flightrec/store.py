@@ -19,7 +19,8 @@ CREATE TABLE IF NOT EXISTS runs (
     summary TEXT, model TEXT, mode TEXT NOT NULL DEFAULT 'live', replay_of TEXT,
     created_at REAL NOT NULL, ended_at REAL, steps INTEGER NOT NULL DEFAULT 0,
     tokens_in INTEGER NOT NULL DEFAULT 0, tokens_out INTEGER NOT NULL DEFAULT 0, cost REAL NOT NULL DEFAULT 0,
-    active_seconds REAL NOT NULL DEFAULT 0, lease_owner TEXT, lease_until REAL
+    active_seconds REAL NOT NULL DEFAULT 0, lease_owner TEXT, lease_until REAL,
+    resolution TEXT  -- set when a person resolves an escalated / failed / stopped run
 );
 CREATE TABLE IF NOT EXISTS steps (
     run_id TEXT NOT NULL, seq INTEGER NOT NULL, kind TEXT NOT NULL, ts REAL NOT NULL,
@@ -35,6 +36,8 @@ CREATE TABLE IF NOT EXISTS controls (key TEXT PRIMARY KEY, value TEXT NOT NULL, 
 """
 
 TERMINAL = {"succeeded", "failed", "stopped", "needs_human"}
+RUN_COLUMNS = ("id", "task_id", "goal", "status", "summary", "model", "mode", "replay_of", "created_at", "ended_at",
+               "steps", "tokens_in", "tokens_out", "cost", "active_seconds", "resolution")
 TASK_ID = re.compile(r"T-\d{1,6}")
 DECISIONS = {"approved", "rejected", "changes_requested"}
 
@@ -53,6 +56,9 @@ class Store:
         with self._lock:
             self._db.execute("PRAGMA journal_mode=WAL")
             self._db.executescript(SCHEMA)
+            cols = {r[1] for r in self._db.execute("PRAGMA table_info(runs)")}
+            if "resolution" not in cols:  # databases created before this column existed
+                self._db.execute("ALTER TABLE runs ADD COLUMN resolution TEXT")
 
     # ---------------------------------------------------------------- runs
     def create_run(self, task_id: str, goal: str, model: str, mode: str = "live", replay_of: str | None = None) -> str:
@@ -136,6 +142,34 @@ class Store:
             if cur.rowcount == 0:
                 raise ValueError("no pending approval with that id")
         return self.get_approval(run_id, call_id)
+
+    def import_run(self, doc: dict) -> bool:
+        """Load an exported trace (runs/final/*.json) so it can be viewed and replayed with no LLM key and no world.
+        Returns False if a run with that id is already here (imports are idempotent)."""
+        r = doc["run"]
+        if not isinstance(r.get("id"), str) or r.get("status") not in TERMINAL:
+            # only finished runs: an imported "running" run would be picked up by the janitor and executed for real
+            raise ValueError(f"refusing to import run {r.get('id')!r} with status {r.get('status')!r}: only finished runs")
+        if self.get_run(r["id"]):
+            return False
+        cols = [c for c in RUN_COLUMNS if c in r]  # fixed allowlist: file keys never become SQL identifiers
+        with self._lock:
+            self._db.execute("BEGIN")
+            try:
+                self._db.execute(f"INSERT INTO runs ({', '.join(cols)}) VALUES ({', '.join('?' * len(cols))})", [r[c] for c in cols])
+                for s in doc["steps"]:
+                    self._db.execute("INSERT INTO steps (run_id, seq, kind, ts, latency_ms, data, msg) VALUES (?,?,?,?,?,?,?)",
+                                     (r["id"], s["seq"], s["kind"], s["ts"], s["latency_ms"], json.dumps(s["data"]),
+                                      json.dumps(s["msg"]) if s["msg"] else None))
+                for a in doc.get("approvals", []):
+                    self._db.execute("INSERT INTO approvals (run_id, call_id, tool, args, args_hash, reason, status, note, created_at, decided_at) "
+                                     "VALUES (?,?,?,?,?,?,?,?,?,?)", (r["id"], a["call_id"], a["tool"], json.dumps(a["args"]), a["args_hash"],
+                                                                     a["reason"], a["status"], a["note"], a["created_at"], a["decided_at"]))
+                self._db.execute("COMMIT")
+            except Exception:
+                self._db.execute("ROLLBACK")
+                raise
+        return True
 
     def cancel_pending(self, run_id: str, note: str) -> int:
         with self._lock:

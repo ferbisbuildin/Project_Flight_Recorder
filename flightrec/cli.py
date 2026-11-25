@@ -12,6 +12,7 @@
   show    <run_id>                    print a run's timeline
   replay  <run_id>                    re-run from the trace with no LLM and no world calls
   export  <out_dir> <run_id>...       write traces + world_audit.jsonl
+  import  <dir>                       load exported traces (e.g. runs/final) to view / replay without a key
   serve                               start the viewer on :8080
 """
 from __future__ import annotations
@@ -67,7 +68,7 @@ def main(argv: list[str] | None = None) -> int:
     if cmd == "serve":
         import uvicorn
         # No login on the viewer (single operator), so listen on loopback unless told otherwise (Docker sets HOST).
-        uvicorn.run("flightrec.api:app", host=os.environ.get("HOST", "127.0.0.1"), port=8080)
+        uvicorn.run("flightrec.api:app", host=os.environ.get("HOST", "127.0.0.1"), port=int(os.environ.get("PORT", "8080")))
         return 0
     svc = Service(settings())
     if cmd == "run":
@@ -104,6 +105,8 @@ def main(argv: list[str] | None = None) -> int:
         show(svc, rest[0])
     elif cmd == "replay":
         print(json.dumps(svc.replay(rest[0]), indent=2))
+    elif cmd == "import":
+        print(f"imported {len(svc.import_traces(Path(rest[0])))} run(s)")
     elif cmd == "export":
         for p in svc.export(rest[1:], Path(rest[0])):
             print(p)
