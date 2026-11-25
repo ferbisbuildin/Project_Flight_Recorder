@@ -1,0 +1,567 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Flight Recorder</title>
+<style>
+:root {
+  --bg: #eef0f8; --panel: #fff; --ink: #1d2433; --sub: #5f6b80; --faint: #98a2b3; --line: #e7e9f0; --soft: #f7f8fc;
+  --brand: #5b5bd6; --brand-2: #7c6cf2; --brand-bg: #eeeefd;
+  --ok: #12936b; --ok-bg: #e7f7f0; --err: #d93a3a; --err-bg: #fdecec; --warn: #d97706; --warn-bg: #fef4e4;
+  --wait: #3d6fe0; --wait-bg: #e9f0fe;
+  --l-agent: #7c6cf2; --l-read: #3d8be0; --l-act: #14a38b; --l-risk: #c2417a; --l-human: #5b5bd6; --l-end: #1d2433;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace; --r: 12px;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body { margin: 0; font: 13.5px/1.45 Inter, "Segoe UI", system-ui, -apple-system, sans-serif; color: var(--ink); background: var(--bg); }
+button { font: inherit; cursor: pointer; }
+.app { height: 100vh; display: flex; flex-direction: column; padding: 14px; gap: 12px; }
+#killbar { align-items: center; }
+#model { padding: 6px 8px; }
+
+/* ---------- top bar */
+.top { display: flex; align-items: center; gap: 12px; background: var(--panel); border-radius: var(--r); padding: 10px 16px; border: 1px solid var(--line); }
+.logo { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 15px; margin-right: 6px; }
+.logo i { width: 26px; height: 26px; border-radius: 50%; background: conic-gradient(from 200deg, var(--brand), var(--brand-2), #b4a9ff, var(--brand)); display: inline-block; }
+.pill { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+.pill.meta { background: var(--soft); color: var(--sub); font-weight: 500; border: 1px solid var(--line); }
+.grow { flex: 1; }
+.btn { border: 1px solid var(--line); background: #fff; color: var(--ink); border-radius: 9px; padding: 7px 14px; font-weight: 600; white-space: nowrap; }
+.btn:hover { background: var(--soft); }
+.btn.primary { background: var(--brand); border-color: var(--brand); color: #fff; }
+.btn.primary:hover { background: #4b4bc7; }
+.btn.ok { background: var(--ok); border-color: var(--ok); color: #fff; }
+.btn.no { color: var(--err); border-color: #f3c1c1; }
+.btn:disabled { opacity: .5; cursor: not-allowed; }
+.split { display: inline-flex; }
+.split select { border: 1px solid var(--brand); border-left: 1px solid #7e7ee3; background: var(--brand); color: #fff; border-radius: 0 9px 9px 0; padding: 0 8px; font-weight: 600; }
+.split .btn.primary { border-radius: 9px 0 0 9px; }
+
+/* ---------- status pills */
+.s-succeeded, .s-ok, .s-approved { color: var(--ok); background: var(--ok-bg); }
+.s-failed, .s-error, .s-rejected { color: var(--err); background: var(--err-bg); }
+.s-stopped, .s-blocked, .s-needs_human { color: var(--warn); background: var(--warn-bg); }
+.s-running, .s-awaiting_approval, .s-pending { color: var(--wait); background: var(--wait-bg); }
+.dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; display: inline-block; }
+.s-running .dot, .s-awaiting_approval .dot, .s-pending .dot { animation: pulse 1.2s infinite; }
+@keyframes pulse { 50% { opacity: .25; } }
+
+/* ---------- layout */
+.body { flex: 1; min-height: 0; display: grid; grid-template-columns: 280px 1fr 360px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; }
+.col { min-height: 0; overflow: auto; }
+.col.left { border-right: 1px solid var(--line); padding: 14px; }
+.col.right { border-left: 1px solid var(--line); padding: 14px; background: #fcfcfe; }
+.label { font-size: 11.5px; font-weight: 700; color: var(--sub); text-transform: uppercase; letter-spacing: .5px; margin: 4px 0 8px; }
+
+/* ---------- run list */
+.filters { display: flex; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; }
+.filters button { border: 1px solid var(--line); background: #fff; border-radius: 999px; padding: 3px 10px; font-size: 12px; color: var(--sub); }
+.filters button.on { background: var(--brand-bg); color: var(--brand); border-color: #d4d4f7; font-weight: 600; }
+.run { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; cursor: pointer; background: #fff; transition: border-color .15s, box-shadow .15s; }
+.run:hover { border-color: #cfd2f3; }
+.run.sel { border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-bg); }
+.run .r1 { display: flex; align-items: center; gap: 8px; }
+.run .r1 b { font-size: 14px; }
+.run .r1 .pill { margin-left: auto; }
+.run .r2 { display: flex; gap: 12px; color: var(--sub); font-size: 12px; margin-top: 6px; }
+.run .tag { font-size: 10.5px; color: var(--brand); background: var(--brand-bg); border-radius: 5px; padding: 0 5px; font-weight: 600; }
+
+/* ---------- run header */
+.head { display: flex; align-items: center; gap: 14px; padding: 14px 18px 12px; }
+.avatar { width: 38px; height: 38px; border-radius: 50%; display: grid; place-items: center; font-weight: 700; font-size: 13px; flex: none; background: var(--brand-bg); color: var(--brand); }
+.head .who { min-width: 0; }
+.head .who b { display: block; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.head .who span { color: var(--sub); font-size: 12.5px; }
+.stats { display: flex; gap: 30px; padding: 10px 18px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); background: #fcfcfe; flex-wrap: wrap; }
+.stats div b { display: block; font-size: 15px; }
+.stats div span { color: var(--faint); font-size: 11px; text-transform: uppercase; letter-spacing: .4px; }
+.banner { margin: 12px 18px 0; padding: 10px 14px; border-radius: 10px; font-size: 13px; display: flex; gap: 10px; align-items: flex-start; }
+.banner b { white-space: nowrap; }
+
+/* ---------- flight path chart */
+.chartbox { margin: 12px 18px 0; border: 1px solid var(--line); border-radius: 12px; background: var(--soft); }
+.chartbar { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--line); background: #fff; border-radius: 12px 12px 0 0; }
+.chartbar .title { font-weight: 700; }
+.ctrl { width: 30px; height: 30px; border-radius: 8px; border: 1px solid var(--line); background: #fff; display: grid; place-items: center; color: var(--ink); }
+.ctrl.play { background: var(--brand); border-color: var(--brand); color: #fff; }
+.ctrl svg { width: 14px; height: 14px; }
+input[type=range] { accent-color: var(--brand); width: 160px; }
+.speed { border: 1px solid var(--line); border-radius: 8px; padding: 4px 6px; background: #fff; font: inherit; }
+.chart { overflow-x: auto; overflow-y: hidden; }
+.chart svg { display: block; }
+.lane-name { font: 700 10.5px Inter, "Segoe UI", sans-serif; text-transform: uppercase; letter-spacing: .5px; }
+.node { cursor: pointer; transition: opacity .25s; }
+.node.future { opacity: .14; }
+.node .halo { opacity: 0; transition: opacity .2s; }
+.node.cur .halo { opacity: 1; }
+.node text { font: 700 10px Inter, "Segoe UI", sans-serif; pointer-events: none; }
+.node .cap { font: 500 10px Inter, "Segoe UI", sans-serif; fill: var(--sub); }
+.node.live .ring { animation: pulse 1.2s infinite; }
+.legend { display: flex; gap: 14px; padding: 6px 12px 10px; color: var(--sub); font-size: 11.5px; flex-wrap: wrap; }
+.legend span { display: inline-flex; align-items: center; gap: 5px; }
+.legend i { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+
+/* ---------- activity feed (compact) */
+.feed { padding: 12px 18px 30px; }
+.item { display: grid; grid-template-columns: 34px 1fr auto; gap: 10px; align-items: center; padding: 5px 6px; border-radius: 9px; cursor: pointer; position: relative; }
+.item:hover { background: var(--soft); }
+.item.cur { background: var(--brand-bg); }
+.item.future { opacity: .35; }
+.item:not(:last-child)::after { content: ""; position: absolute; left: 22px; top: 36px; bottom: -6px; width: 2px; background: var(--line); }
+.item .av { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; font: 700 10.5px Inter, sans-serif; position: relative; z-index: 1; }
+.item .t { min-width: 0; }
+.item .t b { font-weight: 600; }
+.item .t .sub { color: var(--sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; font-size: 12.5px; }
+.item .m { color: var(--faint); font-size: 11.5px; font-family: var(--mono); text-align: right; }
+
+/* ---------- inspector */
+.card { background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; margin-bottom: 12px; }
+.card.approve { border-color: #cdd8fb; box-shadow: 0 0 0 3px var(--wait-bg); }
+.card h3 { margin: 0 0 6px; font-size: 13.5px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.why { background: var(--soft); border-radius: 8px; padding: 8px 10px; color: #39425a; font-size: 12.5px; margin: 8px 0; }
+.why::before { content: "Why  "; font-weight: 700; color: var(--brand); font-size: 11px; text-transform: uppercase; letter-spacing: .4px; }
+.kv { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; font-size: 12.5px; margin: 6px 0; }
+.kv dt { color: var(--faint); }
+.kv dd { margin: 0; font-family: var(--mono); font-size: 12px; word-break: break-word; white-space: pre-wrap; }
+.err { color: var(--err); background: var(--err-bg); border-radius: 8px; padding: 7px 10px; font-size: 12.5px; margin: 8px 0; }
+details { margin-top: 6px; }
+details summary { cursor: pointer; color: var(--sub); font-size: 12px; font-weight: 600; }
+pre { margin: 6px 0 0; padding: 8px 10px; background: var(--soft); border: 1px solid var(--line); border-radius: 8px; font: 11.5px/1.45 var(--mono); white-space: pre-wrap; word-break: break-word; max-height: 280px; overflow: auto; }
+.attempt { display: grid; grid-template-columns: 70px 1fr auto; gap: 8px; font-size: 12px; padding: 3px 0; align-items: center; }
+.attempt .bar { height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; }
+.attempt .bar i { display: block; height: 100%; border-radius: 3px; }
+textarea { width: 100%; font: inherit; border: 1px solid var(--line); border-radius: 8px; padding: 7px 9px; resize: vertical; margin: 8px 0; }
+.row { display: flex; gap: 8px; align-items: center; }
+.empty { color: var(--faint); text-align: center; padding: 60px 20px; }
+.toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); background: var(--ink); color: #fff; padding: 10px 16px; border-radius: 10px; display: none; z-index: 9; box-shadow: 0 8px 24px rgba(0,0,0,.18); }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="top">
+    <div class="logo"><i></i>Flight Recorder</div>
+    <span class="pill meta" id="cfg-model"></span>
+    <span class="pill meta" id="cfg-world"></span>
+    <span class="grow"></span>
+    <span class="pill meta" id="today" title="Estimated LLM cost of today's live runs"></span>
+    <span class="pill s-pending" id="pending-pill" style="display:none"><span class="dot"></span><span id="pending-n"></span></span>
+    <button class="btn no" id="kill" title="Kill switch: stop every agent at its next safe point">Stop all agents</button>
+    <select id="model" class="btn" aria-label="Model" title="Model for the next run"></select>
+    <div class="split"><button class="btn primary" id="start">Start run</button><select id="task" aria-label="Task"></select></div>
+  </div>
+  <div class="banner s-failed" id="killbar" style="display:none;margin:0"><b>Kill switch engaged</b>
+    <span id="killtext"></span><span class="grow"></span><button class="btn" id="release">Release</button></div>
+
+  <div class="body">
+    <div class="col left">
+      <div class="label">Runs</div>
+      <div class="filters" id="filters">
+        <button data-f="runs" class="on">All runs</button><button data-f="attention">Needs attention</button><button data-f="replays">Replay checks</button>
+      </div>
+      <div id="runs"></div>
+    </div>
+
+    <div class="col mid" id="mid"><div class="empty">Start a run, or pick one on the left.</div></div>
+
+    <div class="col right" id="inspector"><div class="empty">Click any step in the flight path to inspect it.</div></div>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+/* =====================================================================================================
+   Flight Recorder viewer. Plain JS, no build step, no external libraries.
+   Every value can contain customer-written text, so everything rendered goes through esc().
+   ===================================================================================================== */
+const esc = v => String(v ?? "").replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
+const $ = id => document.getElementById(id);
+const ms = v => v == null ? "–" : v >= 1000 ? (v / 1000).toFixed(1) + "s" : Math.round(v) + "ms";
+const clock = t => t ? new Date(t * 1000).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit", second: "2-digit"}) : "";
+const STATUS = {succeeded: "Succeeded", failed: "Failed", stopped: "Stopped (budget)", needs_human: "Needs human",
+                running: "Running", awaiting_approval: "Awaiting approval", ok: "OK", error: "Error", blocked: "Blocked",
+                rejected: "Rejected", approved: "Approved", pending: "Pending"};
+const inr = usd => "₹" + (usd * (state.usdInr || 84)).toFixed(2);
+const pill = s => `<span class="pill s-${esc(s)}"><span class="dot"></span>${esc(STATUS[s] || s)}</span>`;
+const api = async (path, opts = {}) => {
+  const r = await fetch(path, {headers: {"content-type": "application/json"}, ...opts});
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(body.detail || r.statusText);
+  return body;
+};
+const toast = msg => { const t = $("toast"); t.textContent = msg; t.style.display = "block"; clearTimeout(toast.t); toast.t = setTimeout(() => t.style.display = "none", 5000); };
+
+/* ---------- lanes: where each step sits in the flight path */
+const LANES = [
+  {id: "agent", name: "Agent", color: "var(--l-agent)"},
+  {id: "read", name: "Reads", color: "var(--l-read)"},
+  {id: "act", name: "Actions", color: "var(--l-act)"},
+  {id: "risk", name: "Risky", color: "var(--l-risk)"},
+  {id: "human", name: "Human", color: "var(--l-human)"},
+  {id: "end", name: "Outcome", color: "var(--l-end)"},
+];
+const RISKY = new Set(["refund_payment", "send_email"]);
+const ACTS = new Set(["add_ticket_note", "close_ticket"]);
+const ABBR = {get_ticket: "TK", get_customer: "CU", list_payments: "PY", search_kb: "KB", search_tickets: "TS",
+              add_ticket_note: "NT", close_ticket: "CL", refund_payment: "₹", send_email: "@"};
+const STATUS_COLOR = {ok: "var(--ok)", error: "var(--err)", rejected: "var(--err)", blocked: "var(--warn)",
+                      pending: "var(--wait)", approved: "var(--ok)", succeeded: "var(--ok)", failed: "var(--err)",
+                      stopped: "var(--warn)", needs_human: "var(--warn)"};
+
+/* Turn raw trace steps into the events the chart and the activity list show. */
+function toEvents(steps, approvals) {
+  const decided = Object.fromEntries(approvals.map(a => [a.call_id, a]));
+  const ev = [];
+  for (const s of steps) {
+    const d = s.data;
+    if (s.kind === "llm") {
+      const calls = (d.output.tool_calls || []).map(c => c.function.name);
+      ev.push({s, lane: "agent", abbr: "AI", status: "ok", title: "Agent decided",
+               sub: calls.length ? "→ " + calls.join(", ") : "(answered without a tool)", latency: d.latency_ms});
+    } else if (s.kind === "tool" && d.name === "finish") {
+      continue; // the "end" step shows the outcome
+    } else if (s.kind === "tool") {
+      const tries = (d.attempts || []).filter(a => a.attempt > 0).length;
+      ev.push({s, lane: RISKY.has(d.name) ? "risk" : ACTS.has(d.name) ? "act" : "read", abbr: ABBR[d.name] || "T",
+               status: d.status, title: d.name, sub: d.error || d.reason || "", latency: s.latency_ms, retries: Math.max(0, tries - 1)});
+    } else if (s.kind === "approval") {
+      const a = decided[d.call_id];
+      ev.push({s, lane: "human", abbr: "YOU", status: a ? a.status : "pending", title: `Human review: ${d.name}`,
+               sub: a && a.note ? `“${a.note}”` : (a && a.status !== "pending" ? "" : "waiting for a person"),
+               live: !a || a.status === "pending"});
+    } else if (s.kind === "end") {
+      ev.push({s, lane: "end", abbr: "■", status: d.status, title: "Run ended", sub: d.summary});
+    } else if (s.kind === "nudge") {
+      ev.push({s, lane: "agent", abbr: "!", status: "blocked", title: "Agent replied without a tool", sub: "reminded to use tools"});
+    }
+  }
+  return ev;
+}
+
+/* ---------- state */
+const state = {runs: [], filter: "runs", sel: new URLSearchParams(location.hash.slice(1)).get("run"),
+               detail: null, events: [], cursor: -1, focus: -1, playing: false, speed: 1, key: "", checks: {}};
+
+/* ---------- left: run list (replay checks live in their own tab) */
+function renderRuns() {
+  const f = state.filter;
+  const runs = state.runs.filter(r => f === "replays" ? r.mode === "replay"
+    : r.mode === "live" && (f === "runs" || ["awaiting_approval", "failed", "needs_human", "stopped"].includes(r.status)));
+  $("runs").innerHTML = runs.map(r => `
+    <div class="run ${r.id === state.sel ? "sel" : ""}" data-run="${esc(r.id)}">
+      <div class="r1"><b>${esc(r.task_id)}</b>${r.mode === "replay" ? `<span class="tag">REPLAY</span>` : ""}${pill(r.status)}</div>
+      <div class="r2"><span>${r.steps} steps</span><span>${r.active_seconds.toFixed(0)}s</span>
+        <span>${(r.tokens_in + r.tokens_out).toLocaleString()} tok · ${inr(r.cost)}</span></div>
+      <div class="r2"><span>${r.mode === "replay" ? "check of " + esc(r.replay_of) : "started " + clock(r.created_at)}</span></div>
+    </div>`).join("") || `<div class="empty">Nothing here yet.</div>`;
+}
+
+/* ---------- middle: header, banners, flight path, activity */
+function ticketInfo(steps) {
+  const t = steps.find(s => s.kind === "tool" && s.data.name === "get_ticket" && s.data.status === "ok");
+  const c = steps.find(s => s.kind === "tool" && s.data.name === "get_customer" && s.data.status === "ok");
+  return {subject: t && t.data.result && t.data.result.subject, name: c && c.data.result && c.data.result.name};
+}
+
+function renderMid() {
+  const {run: r, steps} = state.detail;
+  const info = ticketInfo(steps);
+  const initials = (info.name || r.task_id).split(/[\s-]+/).map(w => w[0]).join("").slice(0, 2).toUpperCase();
+  const tools = steps.filter(s => s.kind === "tool");
+  const retries = tools.reduce((n, s) => n + Math.max(0, (s.data.attempts || []).filter(a => a.attempt > 0).length - 1), 0);
+  const problems = tools.filter(s => ["error", "blocked", "rejected"].includes(s.data.status)).length;
+  const check = state.checks[r.id];
+  const busy = r.status === "running";
+  $("mid").innerHTML = `
+    <div class="head">
+      <div class="avatar">${esc(initials)}</div>
+      <div class="who"><b>${esc(r.task_id)} · ${esc(info.subject || r.goal)}</b>
+        <span>${esc(info.name || "customer not loaded yet")} · ${esc(r.model)}${r.replay_of ? " · replay check of " + esc(r.replay_of) : ""}</span></div>
+      ${pill(r.status)}
+      <span class="grow"></span>
+      ${r.mode === "live" ? `<button class="btn" id="replay" ${busy ? "disabled" : ""}
+         title="Re-run this trace with no LLM and no world calls, and confirm every step comes out identical">Verify replay</button>` : ""}
+    </div>
+    <div class="stats">
+      <div><b>${r.steps}</b><span>steps</span></div><div><b>${r.active_seconds.toFixed(1)}s</b><span>active time</span></div>
+      <div><b>${(r.tokens_in + r.tokens_out).toLocaleString()}</b><span>tokens</span></div><div><b>${inr(r.cost)}</b><span>cost ($${r.cost.toFixed(4)})</span></div>
+      <div><b style="color:${retries ? "var(--warn)" : "inherit"}">${retries}</b><span>retries</span></div>
+      <div><b style="color:${problems ? "var(--err)" : "inherit"}">${problems}</b><span>errors / blocks</span></div>
+      <div><b>${clock(r.created_at)}</b><span>started</span></div>
+    </div>
+    ${r.summary ? `<div class="banner s-${esc(r.status)}"><b>Outcome</b><span>${esc(r.summary)}</span></div>` : ""}
+    ${check ? `<div class="banner ${check.identical ? "s-ok" : "s-error"}"><b>Replay check</b><span>${check.identical
+        ? `✓ Identical: re-ran ${check.steps_replay} steps from the trace with no LLM and no world calls.`
+        : `✗ Diverged at step ${check.first_difference}. Open the replay under “Replay checks” to see where.`}</span></div>` : ""}
+    <div class="chartbox">
+      <div class="chartbar">
+        <span class="title">Flight path</span><span class="pill meta">${state.events.length} events</span>
+        <span class="grow"></span>
+        <button class="ctrl" id="first" title="Start"><svg viewBox="0 0 16 16"><path d="M3 2h2v12H3zM14 2 6 8l8 6z" fill="currentColor"/></svg></button>
+        <button class="ctrl" id="prev" title="Previous step (←)"><svg viewBox="0 0 16 16"><path d="M11 2 3 8l8 6z" fill="currentColor"/></svg></button>
+        <button class="ctrl play" id="play" title="Play (space)"></button>
+        <button class="ctrl" id="next" title="Next step (→)"><svg viewBox="0 0 16 16"><path d="m5 2 8 6-8 6z" fill="currentColor"/></svg></button>
+        <button class="ctrl" id="last" title="End"><svg viewBox="0 0 16 16"><path d="M11 2h2v12h-2zM2 2l8 6-8 6z" fill="currentColor"/></svg></button>
+        <input type="range" id="scrub" min="0" max="${Math.max(0, state.events.length - 1)}" value="${Math.max(0, state.cursor)}">
+        <select class="speed" id="speed"><option value="1">1×</option><option value="2">2×</option><option value="4">4×</option></select>
+      </div>
+      <div class="chart" id="chart"></div>
+      <div class="legend">
+        <span><i style="background:var(--ok)"></i>ok</span><span><i style="background:var(--err)"></i>error / rejected</span>
+        <span><i style="background:var(--warn)"></i>blocked by policy</span><span><i style="background:var(--wait)"></i>waiting for a person</span>
+        <span><i style="background:var(--err);width:6px;height:6px"></i>one dot per retry</span>
+      </div>
+    </div>
+    <div class="feed" id="feed"></div>`;
+  $("speed").value = String(state.speed);
+  renderChart(); renderFeed(); renderPlayIcon();
+}
+
+function renderChart() {
+  const ev = state.events, LW = 92, LH = 50, X0 = 128, DX = 60;
+  const w = Math.max(X0 + ev.length * DX + 40, 640), h = LANES.length * LH + 22;
+  const laneY = id => 18 + LANES.findIndex(l => l.id === id) * LH + LH / 2;
+  const pts = ev.map((e, i) => [X0 + i * DX, laneY(e.lane)]);
+  let svg = `<svg width="${w}" height="${h}" xmlns="http://www.w3.org/2000/svg">`;
+  LANES.forEach((l, i) => {
+    const y = 18 + i * LH;
+    svg += `<rect x="0" y="${y}" width="${w}" height="${LH}" fill="${i % 2 ? "#fff" : "transparent"}" opacity=".6"/>`;
+    svg += `<circle cx="16" cy="${y + LH / 2}" r="4" fill="${l.color}"/><text class="lane-name" x="26" y="${y + LH / 2 + 4}" fill="${l.color}">${l.name}</text>`;
+  });
+  svg += `<line x1="${LW}" y1="10" x2="${LW}" y2="${h}" stroke="var(--line)"/>`;
+  // the path flown so far (solid) and still to come (dashed)
+  for (let i = 1; i < pts.length; i++) {
+    const [x1, y1] = pts[i - 1], [x2, y2] = pts[i], mx = (x1 + x2) / 2;
+    const done = i <= state.cursor;
+    svg += `<path d="M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}" fill="none" stroke="${done ? "var(--brand)" : "#c9cde0"}"
+             stroke-width="${done ? 2.2 : 1.4}" ${done ? "" : 'stroke-dasharray="4 4"'}/>`;
+  }
+  ev.forEach((e, i) => {
+    const [x, y] = pts[i], lane = LANES.find(l => l.id === e.lane);
+    const col = STATUS_COLOR[e.status] || lane.color;
+    const fill = e.status === "ok" || e.lane === "agent" ? lane.color : col;
+    const cls = ["node", i > state.cursor ? "future" : "", i === state.focus ? "cur" : "", e.live ? "live" : ""].join(" ");
+    const cap = e.lane === "agent" ? "" : e.title.replace("Human review: ", "").replace(/_/g, " ");
+    svg += `<g class="${cls}" data-i="${i}">
+      <title>${esc(e.title)}${e.sub ? " — " + esc(String(e.sub).slice(0, 140)) : ""}</title>
+      <circle class="halo" cx="${x}" cy="${y}" r="21" fill="var(--brand-bg)" stroke="var(--brand)" stroke-width="1.5"/>
+      <circle class="ring" cx="${x}" cy="${y}" r="15" fill="#fff" stroke="${col}" stroke-width="2.5"/>
+      <circle cx="${x}" cy="${y}" r="11" fill="${fill}"/>
+      <text x="${x}" y="${y + 3.5}" text-anchor="middle" fill="#fff">${esc(e.abbr)}</text>
+      ${e.status === "error" || e.status === "rejected" ? `<text x="${x + 12}" y="${y - 10}" fill="var(--err)" style="font-size:12px">✕</text>` : ""}
+      ${e.status === "blocked" ? `<text x="${x + 12}" y="${y - 10}" fill="var(--warn)" style="font-size:12px">⛔</text>` : ""}
+      ${Array.from({length: Math.min(e.retries || 0, 5)}, (_, k) => `<circle cx="${x - 10 + k * 5}" cy="${y + 19}" r="2.2" fill="var(--err)"/>`).join("")}
+      ${cap ? `<text class="cap" x="${x}" y="${y - 19}" text-anchor="middle">${esc(cap.length > 12 ? cap.slice(0, 11) + "…" : cap)}</text>` : ""}
+    </g>`;
+  });
+  svg += `</svg>`;
+  $("chart").innerHTML = svg;
+  const cur = pts[state.focus], c = $("chart");
+  if (cur && (cur[0] < c.scrollLeft + 80 || cur[0] > c.scrollLeft + c.clientWidth - 80)) c.scrollLeft = cur[0] - c.clientWidth / 2;
+}
+
+const AV = {agent: ["AI", "#efeafe", "#6a55e8"], read: ["", "#e6f0fc", "#2f74c8"], act: ["", "#e2f6f2", "#0f8a75"],
+            risk: ["", "#fbe8f0", "#a8336a"], human: ["YOU", "#eeeefd", "#5b5bd6"], end: ["■", "#eceef3", "#1d2433"]};
+function renderFeed() {
+  $("feed").innerHTML = `<div class="label">Activity</div>` + state.events.map((e, i) => {
+    const [txt, bg, fg] = AV[e.lane];
+    return `<div class="item ${i === state.focus ? "cur" : ""} ${i > state.cursor ? "future" : ""}" data-i="${i}">
+      <div class="av" style="background:${bg};color:${fg}">${esc(txt || e.abbr)}</div>
+      <div class="t"><b>${esc(e.title)}</b> ${e.lane !== "agent" ? pill(e.status) : ""}<span class="sub">${esc(e.sub)}</span></div>
+      <div class="m">#${e.s.seq}${e.latency != null ? "<br>" + ms(e.latency) : ""}${e.retries ? `<br><span style="color:var(--err)">${e.retries} retr${e.retries > 1 ? "ies" : "y"}</span>` : ""}</div>
+    </div>`;
+  }).join("");
+}
+
+/* ---------- right: pending approvals + the focused step */
+function kv(obj) {
+  return `<dl class="kv">${Object.entries(obj || {}).map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(typeof v === "string" ? v : JSON.stringify(v))}</dd>`).join("")}</dl>`;
+}
+function attemptsHtml(attempts) {
+  const list = attempts || [];
+  if (!list.length) return "";
+  const max = Math.max(...list.map(a => a.latency_ms || 0), 1);
+  return `<div class="label" style="margin-top:10px">Attempts</div>` + list.map(a => {
+    const good = a.status === 200 && a.classified !== "broken body";
+    return `<div class="attempt"><span>${a.attempt === 0 ? "audit check" : "try " + a.attempt}</span>
+      <span class="bar"><i style="width:${Math.max(4, (a.latency_ms || 0) / max * 100)}%;background:${good ? "var(--ok)" : "var(--err)"}"></i></span>
+      <span class="mono" style="color:${good ? "var(--ok)" : "var(--err)"}">${a.status ?? "—"} ${esc(a.classified || "")} ${ms(a.latency_ms)}${a.waited_s != null ? " +" + a.waited_s + "s wait" : ""}</span></div>`;
+  }).join("");
+}
+
+function renderInspector() {
+  if (document.activeElement && document.activeElement.tagName === "TEXTAREA") return; // don't wipe a note being typed
+  const {approvals} = state.detail;
+  let html = approvals.filter(a => a.status === "pending").map(a => `
+    <div class="card approve">
+      <h3>${pill("pending")} Approve <span class="mono">${esc(a.tool)}</span>?</h3>
+      <div class="why">${esc(a.reason || "(no reason given)")}</div>
+      ${kv(a.args)}
+      <textarea rows="2" id="note-${esc(a.call_id)}" placeholder="Note to the agent (optional)"></textarea>
+      <div class="row"><button class="btn ok" data-decide="1" data-call="${esc(a.call_id)}">Approve</button>
+        <button class="btn no" data-decide="0" data-call="${esc(a.call_id)}">Reject</button></div>
+    </div>`).join("");
+  const e = state.events[state.focus];
+  if (!e) {
+    html += `<div class="empty">Press ▶ to play the run, or click a step.</div>`;
+  } else {
+    const d = e.s.data;
+    html += `<div class="card"><h3>Step ${e.s.seq} · ${esc(e.title)} ${e.lane !== "agent" ? pill(e.status) : ""}</h3>
+      <dl class="kv"><dt>when</dt><dd>${clock(e.s.ts)}</dd><dt>latency</dt><dd>${ms(e.latency)}</dd></dl>`;
+    if (e.s.kind === "llm") {
+      html += `${d.output.content ? `<div class="why">${esc(d.output.content)}</div>` : ""}
+        <dl class="kv"><dt>tokens</dt><dd>${d.tokens_in} in · ${d.tokens_out} out · $${d.cost.toFixed(5)}</dd>
+        <dt>calls</dt><dd>${esc((d.output.tool_calls || []).map(c => c.function.name).join(", ") || "none")}</dd></dl>
+        ${(d.output.tool_calls || []).map(c => `<details><summary>${esc(c.function.name)} arguments</summary><pre>${esc(c.function.arguments)}</pre></details>`).join("")}
+        <details><summary>What the agent saw (${d.input.length} messages)</summary><pre>${esc(JSON.stringify(d.input, null, 2))}</pre></details>`;
+    } else if (e.s.kind === "tool") {
+      html += `${d.reason ? `<div class="why">${esc(d.reason)}</div>` : ""}
+        <div class="label" style="margin-top:10px">Arguments</div>${kv(d.args)}
+        ${d.approval ? `<dl class="kv"><dt>human</dt><dd>${esc(d.approval.status)}${d.approval.note ? " — “" + esc(d.approval.note) + "”" : ""}</dd></dl>` : ""}
+        ${d.error ? `<div class="err">${esc(d.error)}</div>` : ""}
+        ${d.result != null ? `<details ${d.status === "ok" ? "open" : ""}><summary>Result</summary><pre>${esc(JSON.stringify(d.result, null, 2))}</pre></details>` : ""}
+        ${attemptsHtml(d.attempts)}`;
+    } else if (e.s.kind === "approval") {
+      const a = approvals.find(x => x.call_id === d.call_id);
+      html += `<div class="why">${esc(d.reason || "")}</div>${kv(d.args)}
+        <dl class="kv"><dt>decision</dt><dd>${esc(a ? a.status : "pending")}${a && a.note ? " — “" + esc(a.note) + "”" : ""}</dd></dl>`;
+    } else if (e.s.kind === "end") {
+      html += `<div class="why">${esc(d.summary)}</div>`;
+    }
+    html += `</div>`;
+  }
+  $("inspector").innerHTML = html;
+}
+
+/* ---------- playback */
+function setCursor(i, focus = true) {
+  state.cursor = Math.max(-1, Math.min(state.events.length - 1, i));
+  if (focus) state.focus = state.cursor;
+  if ($("scrub")) $("scrub").value = Math.max(0, state.cursor);
+  renderChart(); renderFeed(); renderInspector();
+}
+function renderPlayIcon() {
+  if ($("play")) $("play").innerHTML = state.playing
+    ? `<svg viewBox="0 0 16 16"><path d="M3 2h4v12H3zM9 2h4v12H9z" fill="currentColor"/></svg>`
+    : `<svg viewBox="0 0 16 16"><path d="m4 2 10 6-10 6z" fill="currentColor"/></svg>`;
+}
+function play() {
+  if (state.cursor >= state.events.length - 1) setCursor(-1);
+  state.playing = true; renderPlayIcon(); tick();
+}
+function pause() { state.playing = false; clearTimeout(state.timer); renderPlayIcon(); }
+function tick() {
+  if (!state.playing) return;
+  if (state.cursor >= state.events.length - 1) return pause();
+  setCursor(state.cursor + 1);
+  state.timer = setTimeout(tick, 900 / state.speed);
+}
+
+/* ---------- data */
+async function refreshRuns() {
+  state.runs = await api("/api/runs");
+  const pending = state.runs.filter(r => r.status === "awaiting_approval").length;
+  $("pending-pill").style.display = pending ? "" : "none";
+  $("pending-n").textContent = `${pending} waiting for approval`;
+  renderRuns();
+}
+async function refreshDetail() {
+  if (!state.sel) return;
+  const detail = await api(`/api/runs/${encodeURIComponent(state.sel)}`);
+  const key = JSON.stringify([detail.run.id, detail.run.status, detail.run.steps, detail.approvals.map(a => a.status)]);
+  if (key === state.key) return;
+  const fresh = !state.key.includes(detail.run.id);
+  const atEnd = state.cursor >= state.events.length - 1;
+  state.detail = detail; state.events = toEvents(detail.steps, detail.approvals);
+  if (fresh || (atEnd && !state.playing)) state.cursor = state.focus = state.events.length - 1;
+  renderMid(); renderInspector();
+  state.key = key; // only after a successful render, so a failed render is retried on the next poll
+}
+async function select(id) {
+  pause(); state.sel = id; state.key = ""; state.cursor = state.focus = -1; location.hash = "run=" + id;
+  renderRuns(); await refreshDetail();
+}
+
+/* ---------- events */
+document.addEventListener("click", async ev => {
+  const t = ev.target.closest("[data-run],[data-i],[data-decide],[data-f],button");
+  if (!t) return;
+  if (t.dataset.run) return select(t.dataset.run);
+  if (t.dataset.i != null) { pause(); state.focus = +t.dataset.i; if (state.focus > state.cursor) state.cursor = state.focus; return setCursor(state.cursor, false); }
+  if (t.dataset.f) { state.filter = t.dataset.f; document.querySelectorAll("#filters button").forEach(b => b.classList.toggle("on", b === t)); return renderRuns(); }
+  if (t.dataset.decide) {
+    const note = ($("note-" + t.dataset.call) || {}).value || "";
+    t.disabled = true;
+    try {
+      await api(`/api/approvals/${encodeURIComponent(state.sel)}/${encodeURIComponent(t.dataset.call)}`,
+                {method: "POST", body: JSON.stringify({approve: t.dataset.decide === "1", note})});
+      toast(t.dataset.decide === "1" ? "Approved. The run continues." : "Rejected. The agent has been told why.");
+    } catch (e) { toast(e.message); t.disabled = false; }
+    document.activeElement.blur(); state.key = ""; return refreshAll();
+  }
+  switch (t.id) {
+    case "start":
+      try { const {run_id} = await api("/api/runs", {method: "POST", body: JSON.stringify({task_id: $("task").value, model: $("model").value})}); await refreshRuns(); select(run_id); }
+      catch (e) { toast(e.message); }
+      break;
+    case "replay":  // verify on the server, stay on this run, then play it back
+      t.disabled = true; t.textContent = "Verifying…";
+      try {
+        state.checks[state.sel] = await api(`/api/runs/${encodeURIComponent(state.sel)}/replay`, {method: "POST"});
+        state.key = ""; await refreshAll(); play();
+      } catch (e) { toast(e.message); t.disabled = false; t.textContent = "Verify replay"; }
+      break;
+    case "kill": {
+      const reason = prompt("Stop every agent now? Optional reason:", "");
+      if (reason === null) break;
+      const res = await api("/api/kill", {method: "POST", body: JSON.stringify({reason})});
+      toast(`Kill switch engaged. ${res.stopped_now.length} waiting run(s) stopped now; running ones stop at their next step.`);
+      state.key = ""; await refreshAll(); break;
+    }
+    case "release": await api("/api/kill/release", {method: "POST"}); toast("Kill switch released."); await refreshAll(); break;
+    case "play": state.playing ? pause() : play(); break;
+    case "first": pause(); setCursor(0); break;
+    case "last": pause(); setCursor(state.events.length - 1); break;
+    case "prev": pause(); setCursor(state.cursor - 1); break;
+    case "next": pause(); setCursor(state.cursor + 1); break;
+  }
+});
+document.addEventListener("input", ev => {
+  if (ev.target.id === "scrub") { pause(); setCursor(+ev.target.value); }
+  if (ev.target.id === "speed") state.speed = +ev.target.value;
+});
+document.addEventListener("keydown", ev => {
+  if (["TEXTAREA", "SELECT", "INPUT"].includes(ev.target.tagName) || !state.detail) return;
+  if (ev.key === " ") { ev.preventDefault(); state.playing ? pause() : play(); }
+  if (ev.key === "ArrowRight") { pause(); setCursor(state.cursor + 1); }
+  if (ev.key === "ArrowLeft") { pause(); setCursor(state.cursor - 1); }
+});
+
+async function refreshControls() {
+  const c = await api("/api/config");
+  state.usdInr = c.usd_inr;
+  $("today").textContent = `Today ${"₹" + c.today.inr.toFixed(2)} · ${c.today.runs} runs`;
+  $("killbar").style.display = c.kill ? "flex" : "none";
+  $("killtext").textContent = c.kill ? `“${c.kill.reason}” since ${clock(c.kill.at)}. Running agents stop at their next safe point; no new runs or approvals until released.` : "";
+  $("kill").disabled = !!c.kill;
+}
+async function refreshAll() { await refreshControls(); await refreshRuns(); await refreshDetail(); }
+(async () => {
+  const c = await api("/api/config");
+  $("cfg-model").textContent = "model · " + c.model;
+  $("cfg-world").textContent = "world · " + c.world_url.replace(/^https?:\/\//, "");
+  if (!c.live_enabled) { $("start").disabled = true; $("start").title = "No LLM_API_KEY: replay only"; $("cfg-model").textContent += " · replay only"; }
+  state.usdInr = c.usd_inr;
+  $("model").innerHTML = c.models.map(m => `<option>${esc(m)}</option>`).join("");
+  await refreshControls();
+  const tasks = await api("/api/tasks");
+  $("task").innerHTML = tasks.map(t => `<option value="${esc(t.task_id)}">${esc(t.task_id)}</option>`).join("");
+  await refreshRuns();
+  if (!state.sel) { const first = state.runs.find(r => r.mode === "live"); if (first) state.sel = first.id; }
+  await refreshDetail();
+})().catch(e => toast(e.message));
+setInterval(() => refreshAll().catch(e => console.error(e)), 2000);
+</script>
+</body>
+</html>
