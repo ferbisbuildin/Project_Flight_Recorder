@@ -1,0 +1,10 @@
+services:
+  flightrec:
+    build: .
+    ports: ["127.0.0.1:8080:8080"]               # the viewer has no login: keep it on this machine
+    env_file: [.env]
+    environment:
+      WORLD_URL: http://host.docker.internal:7070   # the world server runs on the host, as given
+      DB_PATH: /app/data/flightrec.db
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    volumes: ["./data:/app/data"]                  # traces survive container restarts
