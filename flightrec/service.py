@@ -83,9 +83,9 @@ class Service:
             raise KeyError(run_id)
         if run["resolution"]:
             return  # already resolved: clicking twice changes nothing
-        note = note.strip() or "handled by a person"
-        self.store.add_step(run_id, "handled", {"note": note})
-        self.store.update_run(run_id, resolution=f"handled by a person: {note}")
+        note = note.strip()
+        self.store.add_step(run_id, "handled", {"note": note or "handled by a person"})
+        self.store.update_run(run_id, resolution=f"handled by a person: {note}" if note else "handled by a person")
 
     def decide(self, run_id: str, call_id: str, decision: bool | str, note: str = "") -> dict:
         if self.store.kill_state():

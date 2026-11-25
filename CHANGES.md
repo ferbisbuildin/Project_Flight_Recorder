@@ -96,3 +96,25 @@ have no evaluation data yet to set the threshold. What I'd do next:
 **Not done:** a per-ticket idempotency key. It's stronger, but it changes the arguments of the already-recorded final
 runs, so their replays would diverge. Doing it means re-recording the final run. It's listed under next steps.
 
+
+---
+
+## 16:00 · Final testing pass
+
+What I checked:
+- **The full offline suite:** 78 tests.
+- **Every API endpoint**, plus the security blocks: another host gets 400, a cross-site POST gets 403.
+- **The kill switch end to end:** engaging it refuses new runs (409), and releasing it allows them again.
+- **All six final runs**, rendered in the viewer with no script errors.
+- **No-key startup and replay:** run earlier with `./run.sh`; all six final runs replay identically.
+
+Issues found and fixed:
+
+| Issue | Fix |
+|---|---|
+| Marking a run handled without a note showed "handled by a person: handled by a person" | The resolution text only adds the note when there is one |
+
+Known and not fixed before the code freeze (also in the README honest status and DEFENSE.md):
+- A refund that 504s and then only times out is reported as "not made". It should be "unknown", checked against the audit.
+- Runs stopped by a budget or the kill switch don't replay as identical, because stop decisions aren't recorded as steps yet.
+- `run.bat` hasn't been tested by double-clicking. `run.sh` has, including with no key.
