@@ -1,6 +1,6 @@
 # Flight Recorder — support agents you can trust and explain
 
-> **Recording:** _link added after the hard stop_
+> **Recording:** [_link added after the hard stop_](https://youtu.be/ADf0g3Sjid8)
 
 Flight Recorder is a **runtime that runs Northwind's support agents** and a **viewer that shows exactly what they did
 and why**. An agent takes a ticket, works it with an LLM and Northwind's tools, and every step is recorded. Anything that
