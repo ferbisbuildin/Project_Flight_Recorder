@@ -21,23 +21,112 @@ own, and every decision it made can be shown to the CFO.
 
 ## How it works
 
+```mermaid
+flowchart LR
+    A[Start run<br/>viewer or CLI] --> B[Load tools<br/>GET /tools]
+    B --> C{Budget left?<br/>steps · time · tokens}
+    C -- no --> S1[stopped]
+    C -- yes --> D[LLM decides<br/>step saved]
+    D --> E{finish called?}
+    E -- yes --> S2[succeeded / failed /<br/>needs_human + summary]
+    E -- no --> F[Validate args<br/>JSON schema + policy guards]
+    F -- invalid --> D
+    F --> G{risk: high?}
+    G -- yes --> H[Pause<br/>approval saved]
+    H --> I{Human}
+    I -- approve --> J
+    I -- "reject + note" --> D
+    G -- no --> J[Call tool<br/>retry policy]
+    J --> K[Result saved as a step]
+    K --> C
 ```
- Viewer :8080 / CLI                 Runner (my own loop)                       Northwind world :7070
- ──────────────────                 ────────────────────                       ─────────────────────
- start run "T-101"   ───────────►   load tools from GET /tools
-                                    ┌► budget check (steps · time · tokens)
-                                    │  LLM decides  ───────────► step saved
-                                    │  validate args (JSON schema) + policy guards
-                                    │  risk: high? ──► PAUSE, approval saved
- approve / reject + note ────────►  │  resume from the store
-                                    │  call tool with retry policy ─────────►   tool runs
-                                    │  result saved as a step ◄──────────────   result / 429 / 5xx / broken body
-                                    └─ until finish(status, summary) or a budget trips
- timeline, retries, errors ◄──────  SQLite: runs · steps · approvals (append-only)
+
+1. **Start.** A run is created for a task ("Handle support ticket T-101 end to end") from the viewer or the CLI.
+2. **Decide.** The LLM sees the task, the tool manifest and every earlier step, and picks the next tool call. The
+   input and output are saved before anything runs.
+3. **Check.** The arguments are validated against the tool's schema and the policy guards. A bad call goes back to the
+   model as an error and never reaches the world.
+4. **Gate.** A `risk: high` tool (refund, email) parks the run until a person approves or rejects it.
+5. **Act.** The tool runs under the retry policy, and the result (or error) becomes the next step.
+6. **End.** The model calls `finish(status, summary)`, or a budget trips and the run ends as `stopped`.
+
+## A run, end to end
+
+```mermaid
+sequenceDiagram
+    participant V as Viewer / CLI
+    participant R as Runner
+    participant L as LLM (Gemini)
+    participant G as Tool gateway
+    participant W as Northwind world
+    participant DB as SQLite
+    V->>R: start run (T-101)
+    R->>W: GET /tools
+    loop until finish or budget
+        R->>L: task + tools + steps so far
+        L-->>R: tool call + reasoning
+        R->>DB: save LLM step (tokens, cost, latency)
+        R->>G: validate args + guards
+        alt risk: high
+            G->>DB: approval pending (args, args hash, reasoning)
+            V->>DB: approve / reject + note
+            DB-->>R: resume run from saved steps
+        end
+        G->>W: POST /tools/name (attempt 1..n)
+        W-->>G: result / 429 / 5xx / broken body
+        G->>DB: save tool step (args, result, error, attempt, latency)
+    end
+    R->>DB: final status + summary
+    V->>DB: run list + timeline
+```
+
+## Architecture
+
+```mermaid
+flowchart TB
+    subgraph UI["Viewer · localhost:8080"]
+        RL[Run list] --- RD[Run timeline] --- AP[Approvals] --- ST[Start run]
+    end
+    CLI[CLI<br/>run · approve · replay] --> API
+    UI --> API
+
+    subgraph API["FastAPI app"]
+        RUN[runner.py<br/>the loop, budgets, finish]
+        RUN --> LLM[llm.py<br/>LLM interface]
+        RUN --> GW[gateway.py<br/>schema validation, retries,<br/>idempotency keys]
+        RUN --> POL[policy.py<br/>guards + approval check]
+        RUN --> STORE[store.py]
+    end
+
+    LLM --> GEM[(Gemini 3.5 Flash Lite<br/>OpenAI-compatible)]
+    LLM -. replay .-> RLLM[ReplayLLM]
+    GW --> WORLD[(Northwind world :7070)]
+    GW -. replay .-> RW[ReplayWorld]
+    STORE --> DB[(SQLite: runs · steps · approvals)]
+    DB --> EXP[runs/final/*.json]
 ```
 
 **Replay:** `ReplayLLM` and `ReplayWorld` feed the recorded responses back in order, so the same code path produces
 the same steps with no API key and no world. Tests and the demo run this way.
+
+## Refund safety
+
+```mermaid
+flowchart LR
+    A[Model asks for<br/>refund_payment] --> B{Payment belongs to<br/>ticket's customer?}
+    B -- no --> X[Refused by guard<br/>error back to model]
+    B -- yes --> C[Approval record<br/>exact args + reasoning]
+    C --> D{Human}
+    D -- reject --> Y[Rejection + note<br/>back to model]
+    D -- approve --> E{Approved record<br/>args hash matches?}
+    E -- no --> X
+    E -- yes --> F[POST refund<br/>idempotency_key = run:call]
+    F --> G{Response}
+    G -- 200 --> H[Done]
+    G -- "504 / 429" --> I[Retry with the<br/>same key]
+    I --> G
+    G -- "replayed: true" --> H
+```
 
 ## Components
 
