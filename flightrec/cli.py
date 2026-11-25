@@ -1,6 +1,8 @@
 """Command line: python -m flightrec <command>
 
-  run T-101 [T-102 ...] | run --all   start runs (pauses at approvals; use `approve` or the viewer)
+  run T-101 [T-102 ...] | run --all   start runs in parallel (pauses at approvals; use `approve` or the viewer)
+  stop-all [reason]                   kill switch: stop every agent safely; report what happened to money
+  release                             release the kill switch
   approvals                           list pending approvals
   approve <run_id> <call_id> [note]   approve and continue the run
   reject  <run_id> <call_id> [note]   reject and continue the run
@@ -14,7 +16,9 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from .config import settings
@@ -61,16 +65,26 @@ def main(argv: list[str] | None = None) -> int:
     cmd, rest = a[0], a[1:]
     if cmd == "serve":
         import uvicorn
-        uvicorn.run("flightrec.api:app", host="0.0.0.0", port=8080)
+        # No login on the viewer (single operator), so listen on loopback unless told otherwise (Docker sets HOST).
+        uvicorn.run("flightrec.api:app", host=os.environ.get("HOST", "127.0.0.1"), port=8080)
         return 0
     svc = Service(settings())
     if cmd == "run":
         ids = [t["task_id"] for t in svc.tasks()] if rest == ["--all"] else rest
         goals = {t["task_id"]: t["goal"] for t in svc.tasks()}
-        for tid in ids:
-            rid = svc.create_live(tid, goals.get(tid))
-            svc.advance(rid)
+        rids = [svc.create_live(tid, goals.get(tid)) for tid in ids]
+        with ThreadPoolExecutor(max_workers=svc.cfg.workers) as pool:  # billing calls share one company-wide limiter
+            list(pool.map(svc.advance, rids))
+        for rid in rids:
             show(svc, rid)
+    elif cmd == "stop-all":
+        stopped = svc.kill_all(" ".join(rest))
+        print(f"Kill switch ENGAGED. Running agents stop at their next safe point. Stopped now: {len(stopped)}")
+        for rid in stopped:
+            print(f"  {rid}: {svc.store.get_run(rid)['summary']}")
+    elif cmd == "release":
+        svc.release_kill()
+        print("Kill switch released. Runs can start again.")
     elif cmd == "approvals":
         for p in svc.store.approvals(status="pending"):
             print(f"{p['run_id']} {p['call_id']} {p['tool']} {json.dumps(p['args'])}\n    why: {p['reason']}")

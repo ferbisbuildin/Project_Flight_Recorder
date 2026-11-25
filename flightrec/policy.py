@@ -39,6 +39,11 @@ class RunContext:
 
 def guard(name: str, args: dict, ctx: RunContext) -> str | None:
     """Return a reason to block the call, or None if it may proceed."""
+    # A run handles exactly one ticket. Other tickets (and the list of all tickets) are other customers' data.
+    if name == "search_tickets":
+        return f"this run handles {ctx.ticket_id} only; listing other tickets is not needed"
+    if name == "get_ticket" and args.get("ticket_id") != ctx.ticket_id:
+        return f"this run handles {ctx.ticket_id} only; it cannot read {args.get('ticket_id')}"
     if name in ("get_customer", "list_payments"):
         # Customer data enters the conversation only for the ticket's own customer, so it can't be leaked onward.
         if not ctx.ticket_customer:

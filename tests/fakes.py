@@ -8,11 +8,13 @@ from flightrec.llm import LLMReply
 from flightrec.world import Exchange
 
 TOOLS = [
+    {"name": "search_tickets", "description": "List tickets.", "risk": "low", "idempotent": True,
+     "params": {"type": "object", "properties": {"status": {"type": "string", "enum": ["open", "closed"]}}, "additionalProperties": False}},
     {"name": "get_ticket", "description": "Get one ticket.", "risk": "low", "idempotent": True,
      "params": {"type": "object", "properties": {"ticket_id": {"type": "string"}}, "required": ["ticket_id"], "additionalProperties": False}},
     {"name": "get_customer", "description": "Get a customer.", "risk": "low", "idempotent": True,
      "params": {"type": "object", "properties": {"customer_id": {"type": "string"}}, "required": ["customer_id"], "additionalProperties": False}},
-    {"name": "list_payments", "description": "List payments.", "risk": "low", "idempotent": True,
+    {"name": "list_payments", "description": "List payments. Billing API: rate limited.", "risk": "low", "idempotent": True,
      "params": {"type": "object", "properties": {"customer_id": {"type": "string"}}, "required": ["customer_id"], "additionalProperties": False}},
     {"name": "search_kb", "description": "Search KB.", "risk": "low", "idempotent": True,
      "params": {"type": "object", "properties": {"query": {"type": "string", "minLength": 2}}, "required": ["query"], "additionalProperties": False}},
@@ -22,7 +24,7 @@ TOOLS = [
     {"name": "close_ticket", "description": "Close.", "risk": "low", "idempotent": True,
      "params": {"type": "object", "properties": {"ticket_id": {"type": "string"}, "resolution": {"type": "string", "minLength": 3}},
                 "required": ["ticket_id", "resolution"], "additionalProperties": False}},
-    {"name": "refund_payment", "description": "Refund.", "risk": "high", "idempotent": False,
+    {"name": "refund_payment", "description": "Refund. Billing API: rate limited.", "risk": "high", "idempotent": False,
      "params": {"type": "object", "properties": {"payment_id": {"type": "string"}, "amount": {"type": "integer", "minimum": 1},
                                                  "reason": {"type": "string"}, "idempotency_key": {"type": "string"}},
                 "required": ["payment_id", "amount", "reason"], "additionalProperties": False}},

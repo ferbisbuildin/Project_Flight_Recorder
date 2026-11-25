@@ -318,3 +318,45 @@ def test_retry_after_is_clamped(header):
 def test_task_ids_are_strict(tmp_path, bad):
     with pytest.raises(ValueError):
         Store(tmp_path / "db.sqlite").create_run(bad, "goal", "m")
+
+
+def test_agent_reads_only_its_own_ticket(tmp_path):
+    store, world = Store(tmp_path / "db.sqlite"), FakeWorld()
+    llm = ScriptedLLM([[call("search_tickets")], [call("get_ticket", ticket_id="T-102")],
+                       [call("finish", status="needs_human", summary="x")]])
+    rid = Runner(store).start("T-101", GOAL, deps(llm, world))
+    assert [s["data"]["status"] for s in store.steps(rid) if s["kind"] == "tool"][:2] == ["blocked", "blocked"]
+    assert world.calls == []
+
+
+def test_replay_mirrors_the_trace_even_if_an_approval_landed_after_it(tmp_path):
+    """Approved in the UI, but the original hasn't executed it yet: the replay must stop where the trace stops."""
+    svc = Service(settings(tmp_path))
+    llm = ScriptedLLM([[call("get_ticket", ticket_id="T-101")], [call("list_payments", customer_id="C-01")],
+                       [call("refund_payment", payment_id="PAY-2", amount=4999, reason="dup")]])
+    rid = svc.runner.start("T-101", GOAL, deps(llm, FakeWorld()))
+    approve_all(svc.store, rid)  # decided, but the original run has not been advanced yet
+    res = svc.replay(rid)
+    assert res["identical"] and res["status_replay"] == "awaiting_approval"
+
+
+def test_replay_refuses_a_run_that_is_executing(tmp_path):
+    from flightrec.service import RunBusy
+    svc = Service(settings(tmp_path))
+    rid = svc.store.create_run("T-101", GOAL, "scripted")  # status "running"
+    with pytest.raises(RunBusy):
+        svc.replay(rid)
+
+
+def test_llm_429_waits_for_the_providers_retry_delay(monkeypatch):
+    from flightrec.gateway import RateLimiter
+    body = '{"error": {"code": 429, "details": [{"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": "34s"}]}}'
+    replies = [httpx.Response(429, text=body),
+               httpx.Response(200, json={"choices": [{"message": {"role": "assistant", "content": "ok"}}], "usage": {}})]
+    monkeypatch.setattr(httpx, "post", lambda *a, **k: replies.pop(0))
+    slept, now = [], [0.0]
+    lim = RateLimiter(1, clock=lambda: now[0], sleep=lambda s: None)
+    llm = OpenAICompatLLM("http://llm", "key", "m", sleep=slept.append, limiter=lim)
+    assert llm.complete([{"role": "user", "content": "x"}], []).attempts == 2
+    assert 34 <= slept[0] < 36           # honoured the provider's delay, not our 2s backoff
+    assert lim.acquire() >= 33           # and every other agent was told to wait too

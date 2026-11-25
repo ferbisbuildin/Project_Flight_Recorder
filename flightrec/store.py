@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS approvals (
     reason TEXT, status TEXT NOT NULL, note TEXT, created_at REAL NOT NULL, decided_at REAL,
     PRIMARY KEY (run_id, call_id)
 );
+CREATE TABLE IF NOT EXISTS controls (key TEXT PRIMARY KEY, value TEXT NOT NULL, at REAL NOT NULL);
 """
 
 TERMINAL = {"succeeded", "failed", "stopped", "needs_human"}
@@ -127,6 +128,24 @@ class Store:
             if cur.rowcount == 0:
                 raise ValueError("no pending approval with that id")
         return self.get_approval(run_id, call_id)
+
+    def cancel_pending(self, run_id: str, note: str) -> int:
+        with self._lock:
+            return self._db.execute("UPDATE approvals SET status='cancelled', note=?, decided_at=? WHERE run_id=? AND status='pending'",
+                                    (note, time.time(), run_id)).rowcount
+
+    # ---------------------------------------------------------------- kill switch (persists across restarts)
+    def set_kill(self, engaged: bool, reason: str = "") -> None:
+        with self._lock:
+            if engaged:
+                self._db.execute("INSERT OR REPLACE INTO controls (key, value, at) VALUES ('kill', ?, ?)", (reason or "engaged", time.time()))
+            else:
+                self._db.execute("DELETE FROM controls WHERE key='kill'")
+
+    def kill_state(self) -> dict | None:
+        with self._lock:
+            r = self._db.execute("SELECT value, at FROM controls WHERE key='kill'").fetchone()
+        return {"reason": r["value"], "at": r["at"]} if r else None
 
     def get_approval(self, run_id: str, call_id: str) -> dict | None:
         with self._lock:

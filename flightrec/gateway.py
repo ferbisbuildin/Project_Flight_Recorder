@@ -4,6 +4,7 @@ from __future__ import annotations
 import copy
 import json
 import random
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Callable
@@ -55,9 +56,44 @@ def validate(tool: dict, args: dict) -> str | None:
     return None
 
 
+def is_billing(tool: dict) -> bool:
+    """The manifest marks billing tools in their description ("Billing API: rate limited")."""
+    return "billing api" in tool.get("description", "").lower()
+
+
+class RateLimiter:
+    """One limit shared by every run in this process: the billing API allows 5 calls/s for the WHOLE company.
+
+    Callers reserve evenly spaced slots, so N parallel agents together never exceed the rate. A 429 pushes the next
+    free slot past its Retry-After for everyone, not just the caller that hit it.
+    shortcut: in-process only; several worker processes would need a shared limiter (e.g. Redis)."""
+
+    def __init__(self, per_second: float, clock: Callable[[], float] = time.monotonic,
+                 sleep: Callable[[float], None] = time.sleep):
+        self.interval, self._clock, self._sleep = 1.0 / per_second, clock, sleep
+        self._next = 0.0
+        self._lock = threading.Lock()
+
+    def acquire(self) -> float:
+        with self._lock:
+            now = self._clock()
+            slot = max(now, self._next)
+            self._next = slot + self.interval
+        wait = slot - now
+        if wait > 0:
+            self._sleep(wait)
+        return wait
+
+    def back_off(self, seconds: float) -> None:
+        with self._lock:
+            self._next = max(self._next, self._clock() + seconds)
+
+
 class Gateway:
-    def __init__(self, world: World, manifest: Manifest, sleep: Callable[[float], None] = time.sleep, jitter: bool = True):
+    def __init__(self, world: World, manifest: Manifest, sleep: Callable[[float], None] = time.sleep, jitter: bool = True,
+                 limiter: RateLimiter | None = None, stop: Callable[[], bool] = lambda: False):
         self.world, self.manifest, self._sleep, self._jitter = world, manifest, sleep, jitter
+        self.limiter, self.stop = limiter, stop
 
     def _wait(self, seconds: float) -> float:
         s = seconds + (random.uniform(0, 0.5) if self._jitter else 0)
@@ -78,9 +114,19 @@ class Gateway:
         if not retry_safe:
             audit_mark = self._audit_len(attempts)
         backoff = 0.5
+        limiter = self.limiter if is_billing(tool) else None
         for n in range(1, MAX_ATTEMPTS + 1):
+            if n > 1 and self.stop() and "idempotency_key" not in args:
+                # Kill switch: don't start another attempt. Earlier ones failed (and for notes/emails the audit showed
+                # they did not land), so nothing is half-done. Refunds keep resolving: same key = safe, and it is
+                # how we find out whether the money moved.
+                return Outcome(False, error=f"stopped by operator before retrying {name}; it did not complete",
+                               attempts=attempts)
+            queued = limiter.acquire() if limiter else 0
             x = self.world.request("POST", f"/tools/{name}", args)
             rec = {**x.to_dict(), "attempt": n}
+            if queued > 0.001:
+                rec["queued_s"] = round(queued, 3)
             attempts.append(rec)
             if x.status == 200:
                 try:
@@ -89,7 +135,10 @@ class Gateway:
                     rec["classified"] = "broken body"
             elif x.status == 429:
                 rec["classified"] = "rate limited"
-                rec["waited_s"] = self._wait(self._retry_after(x))
+                wait = self._retry_after(x)
+                if limiter:
+                    limiter.back_off(wait)  # everyone waits, not just us
+                rec["waited_s"] = self._wait(wait)
                 continue
             elif x.status in NO_RETRY:
                 rec["classified"] = "rejected by world, not retried"

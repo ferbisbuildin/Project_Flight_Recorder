@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 from .config import Budget
-from .gateway import Gateway, Manifest, validate
+from .gateway import Gateway, Manifest, RateLimiter, validate
 from .llm import LLM, LLMError
 from .policy import ApprovalRequired, RunContext, guard
 from .store import TERMINAL, Store
@@ -84,6 +84,23 @@ class Deps:
     jitter: bool = True
     price_in_per_m: float = 0.0
     price_out_per_m: float = 0.0
+    limiter: RateLimiter | None = None   # shared across all live runs (company-wide billing limit)
+    obey_kill: bool = True               # replays don't touch the world, so the kill switch doesn't apply
+
+
+def money_report(steps: list[dict], cancelled: list[dict]) -> str:
+    """What happened to money in this run, for the person who pressed the kill switch."""
+    lines = []
+    for s in steps:
+        d = s["data"]
+        if s["kind"] == "tool" and d["name"] == "refund_payment":
+            a = d["args"]
+            what = {"ok": f"DONE (refund {(d['result'] or {}).get('refund_id', '?')})", "rejected": "not made (rejected)",
+                    "blocked": "not made (blocked by policy)"}.get(d["status"], f"NOT made ({d['error']})")
+            lines.append(f"refund {a.get('payment_id')} INR {a.get('amount')}: {what}")
+    lines += [f"refund {c['args'].get('payment_id')} INR {c['args'].get('amount')}: not made (approval cancelled)"
+              for c in cancelled if c["tool"] == "refund_payment"]
+    return "Money: " + ("; ".join(lines) if lines else "no refunds were made in this run.")
 
 
 class Runner:
@@ -129,16 +146,21 @@ class Runner:
         manifest = self._manifest(run_id, deps)
         if manifest is None:
             return self._end(run_id, "failed", "could not load the tool manifest from the world")
-        gateway = Gateway(deps.world, manifest, sleep=deps.sleep, jitter=deps.jitter)
+        killed = (lambda: self.store.kill_state() is not None) if deps.obey_kill else (lambda: False)
+        gateway = Gateway(deps.world, manifest, sleep=deps.sleep, jitter=deps.jitter, limiter=deps.limiter, stop=killed)
         tools = manifest.llm_tools() + [FINISH]
         while True:
             if not self.store.claim(run_id, owner):  # refresh the lease; lost it = someone else took over
                 return "running"
             steps = self.store.steps(run_id)
+            if killed():  # safe point: between steps, nothing in flight
+                return self.stop_by_operator(run_id)
             ctx = RunContext.from_steps(run["goal"], steps)
             pending = self._pending_calls(steps)
             if pending:
                 for call in pending:
+                    if killed():
+                        return self.stop_by_operator(run_id)
                     outcome = self._handle_call(run, call, manifest, gateway, ctx, steps)
                     if outcome in ("paused", "ended"):
                         return self.store.get_run(run_id)["status"]
@@ -322,6 +344,14 @@ class Runner:
             "approval": {k: approval[k] for k in ("status", "note", "decided_at")} if approval else None,
         }, msg=msg, latency_ms=round(latency_ms, 1) if latency_ms is not None else None)
         return "done"
+
+    def stop_by_operator(self, run_id: str) -> str:
+        """Kill switch: end the run cleanly, cancel its pending approvals, and say exactly what happened to money."""
+        pending = self.store.approvals(run_id, status="pending")
+        self.store.cancel_pending(run_id, "cancelled by kill switch")
+        kill = self.store.kill_state() or {}
+        return self._end(run_id, "stopped", f"Stopped by operator (kill switch: {kill.get('reason', 'engaged')}). "
+                                            + money_report(self.store.steps(run_id), pending))
 
     def _root(self, run: dict) -> str:
         """The original live run behind a (possibly nested) replay: replays must send byte-identical arguments."""

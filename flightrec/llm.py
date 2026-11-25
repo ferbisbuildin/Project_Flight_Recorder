@@ -3,6 +3,7 @@ Replay: hands back the recorded responses in order, no network."""
 from __future__ import annotations
 
 import random
+import re
 import time
 from dataclasses import dataclass
 from typing import Callable, Protocol
@@ -31,18 +32,21 @@ class LLM(Protocol):
 
 class OpenAICompatLLM:
     def __init__(self, base_url: str, api_key: str, model: str, timeout: float = 90.0,
-                 sleep: Callable[[float], None] = time.sleep, max_attempts: int = 5):
+                 sleep: Callable[[float], None] = time.sleep, max_attempts: int = 8, limiter=None):
         if not api_key:
             raise LLMError("LLM_API_KEY is not set: live runs need a key (replay works without one)")
         self.model = model
         self._url = base_url.rstrip("/") + "/chat/completions"
         self._headers = {"Authorization": f"Bearer {api_key}"}
         self._timeout, self._sleep, self._max = timeout, sleep, max_attempts
+        self._limiter = limiter  # shared by all parallel runs: the provider's requests-per-minute is per key, not per agent
 
     def complete(self, messages: list[dict], tools: list[dict]) -> LLMReply:
         body = {"model": self.model, "messages": messages, "tools": tools, "tool_choice": "required"}
-        last = ""
+        last, wait = "", 0.0
         for attempt in range(1, self._max + 1):
+            if self._limiter:
+                self._limiter.acquire()
             t0 = time.perf_counter()
             try:
                 r = httpx.post(self._url, headers=self._headers, json=body, timeout=self._timeout)
@@ -60,12 +64,27 @@ class OpenAICompatLLM:
                         return LLMReply(msg, int(u.get("prompt_tokens", 0)), int(u.get("completion_tokens", 0)),
                                         round((time.perf_counter() - t0) * 1000, 1), attempt)
                 elif r.status_code in (429, 500, 502, 503, 504):
-                    last = f"HTTP {r.status_code}: {r.text[:200]}"
+                    last = f"HTTP {r.status_code}: {r.text[:400]}"
+                    wait = retry_delay(r)
+                    if r.status_code == 429 and self._limiter:
+                        self._limiter.back_off(wait or 10.0)  # quota hit: every agent slows down, not just this one
                 else:  # 4xx other than 429: our request is wrong, retrying will not help
                     raise LLMError(f"HTTP {r.status_code}: {r.text[:500]}")
             if attempt < self._max:
-                self._sleep(min(30.0, 2 ** attempt) + random.uniform(0, 1))
+                self._sleep(min(60.0, max(wait, 2 ** attempt)) + random.uniform(0, 1))
+                wait = 0.0
         raise LLMError(f"LLM unavailable after {self._max} attempts: {last}")
+
+
+def retry_delay(r: httpx.Response) -> float:
+    """Seconds the provider asked us to wait: Retry-After, or Gemini's RetryInfo ("retryDelay": "34s"). 0 if none."""
+    try:
+        if "retry-after" in r.headers:
+            return min(60.0, float(r.headers["retry-after"]))
+        m = re.search(r'"retryDelay"\s*:\s*"(\d+(?:\.\d+)?)s"', r.text)
+        return min(60.0, float(m.group(1))) if m else 0.0
+    except ValueError:
+        return 0.0
 
 
 class ReplayLLM:

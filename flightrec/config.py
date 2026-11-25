@@ -38,6 +38,11 @@ class Settings:
     world_url: str
     db_path: Path
     budget: Budget
+    models: tuple[str, ...] = ()   # models an operator may pick per run (first = default); empty -> just llm_model
+    usd_inr: float = 84.0          # display rate for finance; set USD_INR to the day's rate
+    billing_per_second: float = 4.0  # company-wide billing API limit is 5/s; keep headroom
+    workers: int = 4               # runs advanced in parallel by the viewer/CLI
+    llm_per_minute: float = 0      # shared cap on LLM requests across all runs (free tiers are per key); 0 = off
 
 
 def settings() -> Settings:
@@ -51,4 +56,9 @@ def settings() -> Settings:
         world_url=e("WORLD_URL", "http://127.0.0.1:7070"),
         db_path=Path(e("DB_PATH", str(ROOT / "data" / "flightrec.db"))),
         budget=Budget(int(e("MAX_STEPS", "25")), float(e("MAX_SECONDS", "300")), int(e("MAX_TOKENS", "200000"))),
+        models=tuple(m.strip() for m in e("LLM_MODELS", "").split(",") if m.strip()),
+        usd_inr=float(e("USD_INR", "84.0")),
+        billing_per_second=float(e("BILLING_PER_SECOND", "4")),
+        workers=int(e("WORKERS", "4")),
+        llm_per_minute=float(e("LLM_PER_MINUTE", "0")),
     )
