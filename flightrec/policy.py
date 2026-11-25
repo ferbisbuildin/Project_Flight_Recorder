@@ -1,0 +1,70 @@
+"""Guards that hold even if the model is fooled, and the approval invariant.
+
+Context is rebuilt from the run's own recorded tool results, so it survives a restart and replays identically.
+"""
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass, field
+
+from .store import args_hash
+
+
+class ApprovalRequired(Exception):
+    """Raised instead of executing a high-risk tool that has no matching approved record."""
+
+
+@dataclass
+class RunContext:
+    ticket_id: str | None
+    ticket_customer: str | None = None
+    customer_payments: set[str] = field(default_factory=set)
+
+    @classmethod
+    def from_steps(cls, goal: str, steps: list[dict]) -> "RunContext":
+        m = re.search(r"\bT-\d+\b", goal)
+        ctx = cls(m.group(0) if m else None)
+        for s in steps:
+            if s["kind"] == "tool":
+                ctx.observe(s["data"]["name"], s["data"]["args"], s["data"].get("result"))
+        return ctx
+
+    def observe(self, name: str, args: dict, result) -> None:
+        if name == "get_ticket" and isinstance(result, dict) and result.get("ticket_id") == self.ticket_id:
+            self.ticket_customer = result.get("customer_id")
+        if name == "list_payments" and isinstance(result, list) and args.get("customer_id") == self.ticket_customer:
+            self.customer_payments |= {p.get("payment_id") for p in result if isinstance(p, dict)}
+
+
+def guard(name: str, args: dict, ctx: RunContext) -> str | None:
+    """Return a reason to block the call, or None if it may proceed."""
+    if name in ("add_ticket_note", "close_ticket") and args.get("ticket_id") != ctx.ticket_id:
+        return f"this run handles {ctx.ticket_id} only; it cannot modify {args.get('ticket_id')}"
+    if name == "send_email":
+        if not ctx.ticket_customer:
+            return "read the ticket (get_ticket) before emailing anyone"
+        if args.get("customer_id") != ctx.ticket_customer:
+            return f"emails may only go to the ticket's own customer ({ctx.ticket_customer})"
+        text = f"{args.get('subject', '')} {args.get('body', '')}"
+        others = {c for c in re.findall(r"\bC-\d+\b", text) if c != ctx.ticket_customer}
+        foreign = {p for p in re.findall(r"\bPAY-\d+\b", text) if p not in ctx.customer_payments}
+        if others or foreign:
+            return (f"the email mentions data that is not this customer's ({', '.join(sorted(others | foreign))}); "
+                    "never share another customer's information")
+    if name == "refund_payment":
+        if not ctx.ticket_customer:
+            return "read the ticket (get_ticket) before refunding"
+        if args.get("payment_id") not in ctx.customer_payments:
+            return (f"payment {args.get('payment_id')} is not a payment of the ticket's customer {ctx.ticket_customer} "
+                    "(list_payments for that customer first). Refunds never go to a different account.")
+    return None
+
+
+def check_approval(tool: dict, args: dict, approval: dict | None) -> None:
+    """The invariant: a high-risk tool executes only with an approved record for exactly these arguments."""
+    if tool.get("risk") != "high":
+        return
+    if not approval or approval.get("status") != "approved":
+        raise ApprovalRequired(f"{tool['name']} is high risk and has no approved record")
+    if approval.get("args_hash") != args_hash(args):
+        raise ApprovalRequired(f"{tool['name']} arguments differ from what was approved")
