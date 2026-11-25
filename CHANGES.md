@@ -71,23 +71,3 @@ have no evaluation data yet to set the threshold. What I'd do next:
 
 ---
 
-## Reply sent to Ananya
-
-> Hi Ananya,
->
-> Here's what you can have today:
->
-> 1. **Parallel runs that respect the company-wide billing limit.** Every agent shares one limiter, set to 4/s to
->    leave headroom under 5/s. If billing ever pushes back, every agent backs off, not just one. One caveat: the AI
->    provider's own rate limit is the real ceiling for 200 tickets, so tonight needs a paid key or fewer workers.
-> 2. **A kill switch.** One button stops every agent at its next safe point. Anything waiting for approval is
->    cancelled. A refund already in flight is resolved safely, and every stopped run says exactly what happened to
->    money ("refund PAY-… DONE" / "not made").
-> 3. **Cost per run in rupees, plus a daily total.** It's estimated from token usage at a rate finance can set.
-> 4. **Model choice per run.** No automatic "hard vs easy" routing yet: getting that wrong on a refund ticket is
->    exactly the risk you described. I suggest the cheap model by default, re-running escalated tickets on the strong
->    one, and deciding on automation once we've seen a week of results.
->
-> Every refund and customer email still waits for one of your people.
->
-> Vardan
