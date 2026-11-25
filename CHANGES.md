@@ -80,4 +80,19 @@ have no evaluation data yet to set the threshold. What I'd do next:
 | Dark theme | A toggle in the top bar, remembered per browser | — |
 | Security review: DNS rebinding and cross-site POSTs to the local viewer | Only requests addressed to `localhost` / `127.0.0.1` are accepted, and state-changing requests from another site are refused (tested) | The viewer has no login, so the browser is the attack path |
 | Suggestion: rebuild the viewer on CopilotKit | **Not today** | It's a React framework with its own agent runtime. That means a build step, and the brief rules out agent frameworks for the loop. It's a good fit later for a "why did this run escalate?" chat over the traces |
->>>>>>> 1c6c11c (Add request-changes approvals, escalation hand-back, dark theme; block cross-site and rebinding requests)
+
+---
+
+## 15:20 · Second round of operator feedback, and preparing for 200 tickets
+
+| Change | Why |
+|---|---|
+| **T-103 phishing is enforced in code (KB-5).** An injected instruction in the ticket text blocks closing, refunding and finishing `succeeded`; the agent must note it and escalate | In the first final run the model ignored the injection but **closed the ticket**. Right action, wrong outcome. The final run was redone from a clean reset |
+| **"Mark handled" changes the headline status to "Resolved by you"** (and the run leaves *Needs attention*; clicking twice does nothing) | The operator clicked it 4 times because the status still read "Needs human" |
+| **Recorded traces load on startup**; `run.bat` for a Windows double-click; `run.sh` falls back to the system Python when a virtualenv can't be built | A fresh clone with no key must still start and replay. Verified: all six final runs replay identically with no key |
+| **Janitor:** runs whose worker died are re-queued once their lease expires | Found while answering defence Q3: after a crash, the run stayed "Running" forever |
+| **One active run per ticket** | Two agents on one ticket is how a customer gets refunded twice |
+
+**Not done:** a per-ticket idempotency key. It's stronger, but it changes the arguments of the already-recorded final
+runs, so their replays would diverge. Doing it means re-recording the final run. It's listed under next steps.
+

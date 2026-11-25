@@ -18,9 +18,12 @@ python world_server.py
 
 # 2. runtime + viewer: http://localhost:8080
 cp .env.example .env          # add LLM_API_KEY for live runs (replay works without one)
-./run.sh                      # creates .venv, installs requirements, starts the viewer
-#   or: docker compose up     (untested here: no Docker on the build machine)
+./run.sh                      # installs requirements (venv if possible), starts the viewer
+#   Windows: double-click run.bat · or: docker compose up (untested here: no Docker on the build machine)
 ```
+
+**No key? It still works.** On startup the viewer loads the six recorded runs in `runs/final/`, and **Verify replay**
+re-runs any of them from the trace with no LLM and no world, which proves the steps come out identical.
 
 Open **http://localhost:8080**, pick a task, and press **Start run**. When the agent wants to refund or email, it
 pauses and the approval card appears on the right.
@@ -33,9 +36,10 @@ pauses and the approval card appears on the right.
 | `python -m flightrec show <run>` | The step-by-step timeline in the terminal |
 | `python -m flightrec replay <run>` | Re-run from the trace with no LLM and no world calls, and compare |
 | `python -m flightrec stop-all [reason]` / `release` | Kill switch on and off |
-| `python -m flightrec export runs/final <run>...` | Write the traces and `world_audit.jsonl` |
+| `python -m flightrec revise <run> <call> <note>` | Request changes: nothing runs, the agent revises and asks again |
+| `python -m flightrec export runs/final <run>...` / `import runs/final` | Write traces and `world_audit.jsonl` / load them |
 
-**Tests:** `pytest`. All 62 run offline in about 10 seconds, with no API key and no world server: the world and the
+**Tests:** `pytest`. All 77 run offline in about 10 seconds, with no API key and no world server: the world and the
 model are faked.
 
 ## How it works
@@ -100,6 +104,9 @@ flowchart TB
 | Note or email fails ambiguously | Check `GET /audit` before retrying. If we can't tell, don't repeat it; escalate |
 | Crash between "world acted" and "result saved" | An intent step is written first. On resume we check the audit instead of resending |
 | Model tries a risky tool | It pauses. The executor refuses unless an **approved record with a matching argument hash** exists (tested) |
+| Phishing instruction in the ticket (T-103) | Detected in code (KB-5): the ticket can't be closed or refunded and the run can't finish `succeeded`, so it must be noted and escalated |
+| Same ticket started twice | Refused while another run on that ticket is active. The world also refuses refunds beyond the remaining amount |
+| Server killed mid-run | A janitor re-queues runs whose worker died, once the lease expires (≤ about 10 minutes) |
 | Prompt injection in ticket text (T-103) | Tool output is labelled untrusted data. Code guards keep reads, refunds and emails on the ticket's own customer, and an email can't mention another customer's IDs |
 | Runaway loop | Step, active-time and token budgets end the run as `stopped` |
 | Kill switch | Agents stop at the next safe point. Pending approvals are cancelled, a refund in flight is resolved, and each run reports what happened to money |
@@ -118,12 +125,19 @@ See [PLAN.md](PLAN.md). In short:
   - Six tasks end to end against the world with failures on, real model, traces in `runs/final/`.
   - Human approval that survives restarts.
   - Exact replay, the kill switch, and parallel runs under one billing limit.
-  - 62 offline tests. The core safety checks were proven by breaking them on purpose and watching a test fail.
+  - 77 offline tests. The core safety checks were proven by breaking them on purpose and watching a test fail.
+- **Final run:** T-101 refunded once (₹4,999, the duplicate); T-102 and T-104 got no refund and an explanation;
+  T-105 got instructions; T-103 (phishing) and T-106 (refund to another account) were noted and escalated. All six
+  replay identically with no key.
 - **Doesn't (yet):**
   - **No login on the viewer.** It listens on 127.0.0.1 only. A team needs sign-in and approver identity on every
     decision.
   - **The limiters are per process.** Several workers would need a shared one, such as Redis.
-  - **Docker is untested** (not installed here). `./run.sh` is the tested path.
+  - **Docker is untested** (not installed here). `./run.sh` is the tested path (also tested with no key).
+  - **A refund whose every retry times out after a 504 is reported as "not made"**, but the money may have moved. It
+    should say "unknown" and check the audit (see DEFENSE.md, Q1).
+  - **A run stopped by a budget or the kill switch doesn't replay as identical**, because stop decisions aren't in the
+    trace yet (DEFENSE.md, Q2).
 - **What the AI got wrong, and how I caught it:**
   - It gave every tool a runtime field called `reason`, which silently deleted the refund's own required `reason`
     argument. I caught it reading the manifest, and renamed the field to `rationale`.
