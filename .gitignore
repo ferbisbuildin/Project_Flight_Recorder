@@ -6,7 +6,7 @@
 *.zip
 Project_Flight_Recorder_data_pack/
 world_server.py
-world_audit.jsonl
+//world_audit.jsonl
 
 # local tooling
 .claude-flow/
