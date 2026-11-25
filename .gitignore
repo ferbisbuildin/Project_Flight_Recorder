@@ -1,0 +1,27 @@
+# secrets
+.env
+
+# brief + data pack (given to us; world server runs separately)
+*.pdf
+*.zip
+Project_Flight_Recorder_data_pack/
+world_server.py
+world_audit.jsonl
+
+# local tooling
+.claude-flow/
+.swarm/
+.remember/
+.claude/
+
+# python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+
+# runtime data (runs/final/ is committed on purpose)
+data/
+*.db
+*.db-wal
+*.db-shm
