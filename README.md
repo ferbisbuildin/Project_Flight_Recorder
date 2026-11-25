@@ -39,7 +39,7 @@ pauses and the approval card appears on the right.
 | `python -m flightrec revise <run> <call> <note>` | Request changes: nothing runs, the agent revises and asks again |
 | `python -m flightrec export runs/final <run>...` / `import runs/final` | Write traces and `world_audit.jsonl` / load them |
 
-**Tests:** `pytest`. All 77 run offline in about 10 seconds, with no API key and no world server: the world and the
+**Tests:** `pytest`. All 79 run offline in about 10 seconds, with no API key and no world server: the world and the
 model are faked.
 
 ## How it works
@@ -125,7 +125,7 @@ See [PLAN.md](PLAN.md). In short:
   - Six tasks end to end against the world with failures on, real model, traces in `runs/final/`.
   - Human approval that survives restarts.
   - Exact replay, the kill switch, and parallel runs under one billing limit.
-  - 77 offline tests. The core safety checks were proven by breaking them on purpose and watching a test fail.
+  - 79 offline tests. The core safety checks were proven by breaking them on purpose and watching a test fail.
 - **Final run:** T-101 refunded once (₹4,999, the duplicate); T-102 and T-104 got no refund and an explanation;
   T-105 got instructions; T-103 (phishing) and T-106 (refund to another account) were noted and escalated. All six
   replay identically with no key.
@@ -134,8 +134,8 @@ See [PLAN.md](PLAN.md). In short:
     decision.
   - **The limiters are per process.** Several workers would need a shared one, such as Redis.
   - **Docker is untested** (not installed here). `./run.sh` is the tested path (also tested with no key).
-  - **A refund whose every retry times out after a 504 is reported as "not made"**, but the money may have moved. It
-    should say "unknown" and check the audit (see DEFENSE.md, Q1).
+  - **A refund whose retries all time out after a 504** is now reported as **UNKNOWN, check the audit log** (it used
+    to say "not made"). Resolving it automatically from `GET /audit` is next (DEFENSE.md, Q1).
   - **A run stopped by a budget or the kill switch doesn't replay as identical**, because stop decisions aren't in the
     trace yet (DEFENSE.md, Q2).
 - **What the AI got wrong, and how I caught it:**

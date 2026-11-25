@@ -115,6 +115,7 @@ Issues found and fixed:
 | Marking a run handled without a note showed "handled by a person: handled by a person" | The resolution text only adds the note when there is one |
 
 Known and not fixed before the code freeze (also in the README honest status and DEFENSE.md):
-- A refund that 504s and then only times out is reported as "not made". It should be "unknown", checked against the audit.
+- ~~A refund that 504s and then only times out is reported as "not made".~~ **Fixed at 16:12:** the money report
+  now says UNKNOWN and points to the audit log. A clear 4xx refusal still says "not made". Tested.
 - Runs stopped by a budget or the kill switch don't replay as identical, because stop decisions aren't recorded as steps yet.
 - `run.bat` hasn't been tested by double-clicking. `run.sh` has, including with no key.

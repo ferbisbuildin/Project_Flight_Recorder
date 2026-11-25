@@ -98,6 +98,13 @@ def money_report(steps: list[dict], cancelled: list[dict]) -> str:
         d = s["data"]
         if s["kind"] == "tool" and d["name"] == "refund_payment":
             a = d["args"]
+            # a 5xx or a timeout on a refund means the money MAY have moved: never report that as "not made"
+            unsure = d["status"] == "error" and any(x.get("status") is None or x.get("status", 0) >= 500
+                                                    for x in d.get("attempts") or [] if x.get("attempt"))
+            if unsure:
+                lines.append(f"refund {d['args'].get('payment_id')} INR {d['args'].get('amount')}: UNKNOWN, it may "
+                             f"have gone through (server error/timeout); check the audit log before refunding again")
+                continue
             what = {"ok": f"DONE (refund {(d['result'] or {}).get('refund_id', '?')})", "rejected": "not made (rejected)",
                     "changes_requested": "not made (changes requested)",
                     "blocked": "not made (blocked by policy)"}.get(d["status"], f"NOT made ({d['error']})")

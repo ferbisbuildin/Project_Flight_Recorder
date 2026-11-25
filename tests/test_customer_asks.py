@@ -249,3 +249,14 @@ def test_phishing_ticket_must_be_noted_and_escalated_not_closed(tmp_path):
                                                          ("add_ticket_note", "ok"), ("finish", "ok")]
     assert svc.store.get_run(rid)["status"] == "needs_human"
     assert world.executed("close_ticket") == []
+
+
+def test_money_report_says_unknown_when_a_refund_never_got_a_clear_answer():
+    from flightrec.runner import money_report
+    step = {"kind": "tool", "data": {"name": "refund_payment", "status": "error", "error": "still failing after 6 attempts: timeout",
+            "args": {"payment_id": "PAY-2", "amount": 4999}, "result": None,
+            "attempts": [{"attempt": 1, "status": 504}] + [{"attempt": n, "status": None} for n in range(2, 7)]}}
+    assert "UNKNOWN" in money_report([step], []) and "NOT made" not in money_report([step], [])
+    step["data"]["attempts"] = [{"attempt": 1, "status": 422}]   # a clear refusal really means not made
+    step["data"]["error"] = "HTTP 422"
+    assert "NOT made" in money_report([step], [])
