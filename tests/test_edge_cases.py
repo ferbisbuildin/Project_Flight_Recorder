@@ -258,3 +258,63 @@ def test_replay_of_a_rejected_approval_reproduces_the_rejection(tmp_path):
     svc.runner.advance(rid, deps(llm, world))
     res = svc.replay(rid)
     assert res["identical"] and res["status_replay"] == "needs_human"
+
+
+# ------------------------------------------------------------------------------------------------ security review fixes
+def test_crash_recovery_with_unreadable_audit_does_not_resend(tmp_path):
+    class NoAuditAfterCrash(CrashAfterEmail):
+        def request(self, method, path, body=None):
+            if path == "/audit" and not self.crash:
+                return Exchange(method, path, body, 503, "{}", 1.0)
+            return super().request(method, path, body)
+    db, world = tmp_path / "db.sqlite", NoAuditAfterCrash()
+    llm = ScriptedLLM([[call("get_ticket", ticket_id="T-101")],
+                       [call("send_email", customer_id="C-01", subject="Refund", body="Done.")],
+                       [call("finish", status="needs_human", summary="unsure if email went out")]])
+    store = Store(db)
+    rid = Runner(store).start("T-101", GOAL, deps(llm, world))
+    approve_all(store, rid)
+    with pytest.raises(SimulatedCrash):
+        Runner(store).advance(rid, deps(llm, world))
+    assert Runner(Store(db)).advance(rid, deps(llm, world)) == "needs_human"
+    assert len(world.executed("send_email")) == 1
+    step = next(s for s in Store(db).steps(rid) if s["kind"] == "tool" and s["data"]["name"] == "send_email")
+    assert step["data"]["status"] == "error" and "escalate" in step["data"]["error"]
+
+
+@pytest.mark.parametrize("body", ["history of c-09", "Ｃ－０９ paid", "C‑09 and C−09", "payment pay - 9"])
+def test_email_leak_guard_survives_case_and_unicode_tricks(tmp_path, body):
+    store = Store(tmp_path / "db.sqlite")
+    llm = ScriptedLLM([[call("get_ticket", ticket_id="T-101")], [call("list_payments", customer_id="C-01")],
+                       [call("send_email", customer_id="C-01", subject="Info", body=body)]])
+    rid = Runner(store).start("T-101", GOAL, deps(llm, FakeWorld()))
+    email = next(s["data"] for s in store.steps(rid) if s["kind"] == "tool" and s["data"]["name"] == "send_email")
+    assert email["status"] == "blocked" and store.approvals(rid) == []
+
+
+def test_other_customers_data_never_enters_the_conversation(tmp_path):
+    store, world = Store(tmp_path / "db.sqlite"), FakeWorld()
+    llm = ScriptedLLM([[call("get_ticket", ticket_id="T-101")], [call("list_payments", customer_id="C-09")],
+                       [call("get_customer", customer_id="C-09")], [call("finish", status="needs_human", summary="x")]])
+    rid = Runner(store).start("T-101", GOAL, deps(llm, world))
+    assert [s["data"]["status"] for s in store.steps(rid) if s["kind"] == "tool"][1:3] == ["blocked", "blocked"]
+    assert [n for n, _ in world.calls] == ["get_ticket"]
+
+
+@pytest.mark.parametrize("header", ["99999", "-5", "nan", "soon"])
+def test_retry_after_is_clamped(header):
+    class OddRetryAfter(FakeWorld):
+        def request(self, method, path, body=None):
+            if path.startswith("/tools/") and not self.calls:  # first tool call: 429 with a hostile header
+                self.calls.append(("429", {}))
+                return Exchange(method, path, body, 429, "{}", 1.0, headers={"Retry-After": header})
+            return super().request(method, path, body)
+    slept = []
+    out = Gateway(OddRetryAfter(), Manifest(TOOLS), sleep=slept.append, jitter=False).execute("get_ticket", {"ticket_id": "T-101"})
+    assert out.ok and 0 <= slept[0] <= 30
+
+
+@pytest.mark.parametrize("bad", ["../../etc/x", "T-101/../../x", "", "T-1; DROP", "t-101"])
+def test_task_ids_are_strict(tmp_path, bad):
+    with pytest.raises(ValueError):
+        Store(tmp_path / "db.sqlite").create_run(bad, "goal", "m")

@@ -5,6 +5,7 @@ Context is rebuilt from the run's own recorded tool results, so it survives a re
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass, field
 
 from .store import args_hash
@@ -38,6 +39,13 @@ class RunContext:
 
 def guard(name: str, args: dict, ctx: RunContext) -> str | None:
     """Return a reason to block the call, or None if it may proceed."""
+    if name in ("get_customer", "list_payments"):
+        # Customer data enters the conversation only for the ticket's own customer, so it can't be leaked onward.
+        if not ctx.ticket_customer:
+            return "read the ticket (get_ticket) first"
+        if args.get("customer_id") != ctx.ticket_customer:
+            return (f"this run may only read the ticket's own customer ({ctx.ticket_customer}); "
+                    "requests about other accounts need a human")
     if name in ("add_ticket_note", "close_ticket") and args.get("ticket_id") != ctx.ticket_id:
         return f"this run handles {ctx.ticket_id} only; it cannot modify {args.get('ticket_id')}"
     if name == "send_email":
@@ -45,9 +53,11 @@ def guard(name: str, args: dict, ctx: RunContext) -> str | None:
             return "read the ticket (get_ticket) before emailing anyone"
         if args.get("customer_id") != ctx.ticket_customer:
             return f"emails may only go to the ticket's own customer ({ctx.ticket_customer})"
-        text = f"{args.get('subject', '')} {args.get('body', '')}"
-        others = {c for c in re.findall(r"\bC-\d+\b", text) if c != ctx.ticket_customer}
-        foreign = {p for p in re.findall(r"\bPAY-\d+\b", text) if p not in ctx.customer_payments}
+        # Normalise first so "c-09", fullwidth digits or a unicode dash can't slip another customer's ids past the check.
+        text = unicodedata.normalize("NFKC", f"{args.get('subject', '')} {args.get('body', '')}").upper()
+        text = re.sub(r"[‐-―−]", "-", text)
+        others = {f"C-{int(n):02d}" for n in re.findall(r"\bC\s*-\s*(\d+)\b", text)} - {ctx.ticket_customer}
+        foreign = {f"PAY-{n}" for n in re.findall(r"\bPAY\s*-\s*(\d+)\b", text)} - ctx.customer_payments
         if others or foreign:
             return (f"the email mentions data that is not this customer's ({', '.join(sorted(others | foreign))}); "
                     "never share another customer's information")

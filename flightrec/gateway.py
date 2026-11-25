@@ -112,12 +112,15 @@ class Gateway:
 
     @staticmethod
     def _retry_after(x) -> float:
+        """Honour Retry-After, clamped to 0-30s so a hostile or buggy header can't stall a run past its lease."""
         try:
             if x.headers and "Retry-After" in x.headers:
-                return float(x.headers["Retry-After"])
-            return float(json.loads(x.text).get("retry_after_seconds", 1))
+                v = float(x.headers["Retry-After"])
+            else:
+                v = float(json.loads(x.text).get("retry_after_seconds", 1))
         except (ValueError, AttributeError, TypeError):
-            return 1.0
+            v = 1.0
+        return max(0.0, min(v, 30.0)) if v == v else 1.0  # v == v filters NaN
 
     def _audit(self, attempts: list[dict]) -> list | None:
         x = self.world.request("GET", "/audit")
@@ -130,10 +133,12 @@ class Gateway:
         except ValueError:
             return None
 
-    def already_in_audit(self, name: str, args: dict, attempts: list[dict]) -> bool:
-        """Crash recovery: did this exact call already land in the world? (False if the audit can't be read.)"""
+    def already_in_audit(self, name: str, args: dict, attempts: list[dict]) -> bool | None:
+        """Crash recovery: did this exact call already land in the world? None = the audit could not be read."""
         a = self._audit(attempts)
-        return bool(a) and any(e.get("tool") == name and e.get("args") == args for e in a)
+        if a is None:
+            return None
+        return any(e.get("tool") == name and e.get("args") == args for e in a)
 
     def _audit_len(self, attempts: list[dict]) -> int | None:
         a = self._audit(attempts)

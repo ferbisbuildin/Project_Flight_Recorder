@@ -50,6 +50,32 @@ FINISH = {"type": "function", "function": {
 
 
 @dataclass
+class Call:
+    """One tool call the model asked for, with the runtime-only `rationale` split off from the tool's arguments."""
+    run_id: str
+    id: str
+    name: str
+    args: dict
+    reason: str
+    bad_json: str | None = None
+
+    @classmethod
+    def parse(cls, run_id: str, raw: dict) -> "Call":
+        name = raw["function"]["name"]
+        try:
+            args = json.loads(raw["function"].get("arguments") or "{}")
+            if not isinstance(args, dict):
+                raise ValueError("arguments must be a JSON object")
+        except ValueError as e:
+            return cls(run_id, raw["id"], name, {}, "", bad_json=f"arguments are not valid JSON: {e}")
+        return cls(run_id, raw["id"], name, args, str(args.pop("rationale", "")))
+
+
+def _has_step(steps: list[dict], kind: str, call_id: str) -> bool:
+    return any(s["kind"] == kind and s["data"].get("call_id") == call_id for s in steps)
+
+
+@dataclass
 class Deps:
     llm: LLM
     world: World
@@ -203,89 +229,98 @@ class Runner:
         return None
 
     # ------------------------------------------------------------------ one tool call
-    def _handle_call(self, run: dict, call: dict, manifest: Manifest, gateway: Gateway, ctx: RunContext,
+    # parse -> validate -> guard -> approval gate -> execute (crash-safe). Each stage either passes or records a step.
+    def _handle_call(self, run: dict, raw: dict, manifest: Manifest, gateway: Gateway, ctx: RunContext,
                      steps: list[dict]) -> str:
-        run_id, call_id = run["id"], call["id"]
-        name = call["function"]["name"]
-        try:
-            args = json.loads(call["function"].get("arguments") or "{}")
-            if not isinstance(args, dict):
-                raise ValueError("arguments must be a JSON object")
-        except ValueError as e:
-            return self._tool_step(run_id, call_id, name, {}, "", "error", error=f"arguments are not valid JSON: {e}")
-        reason = str(args.pop("rationale", ""))
-
-        if name == "finish":
-            err = validate({"name": "finish", "params": FINISH["function"]["parameters"]}, args)
-            if err:
-                return self._tool_step(run_id, call_id, name, args, reason, "error", error=err)
-            self._tool_step(run_id, call_id, name, args, reason, "ok", result={"ok": True})
-            self._end(run_id, args["status"], args["summary"])
-            return "ended"
-
-        tool = manifest.get(name)
+        call = Call.parse(run["id"], raw)
+        if call.bad_json:
+            return self._record(call, "error", error=call.bad_json)
+        if call.name == "finish":
+            return self._finish(call)
+        tool = manifest.get(call.name)
         if tool is None:
-            return self._tool_step(run_id, call_id, name, args, reason, "error", error=f"unknown tool {name}")
-        if name == "refund_payment":
+            return self._record(call, "error", error=f"unknown tool {call.name}")
+        if call.name == "refund_payment":
             # Stable per run + payment + amount: a retry, or the model asking again, can never refund twice.
-            args["idempotency_key"] = f"{self._root(run)}:{args.get('payment_id')}:{args.get('amount')}"
-        err = validate(tool, args)
+            call.args["idempotency_key"] = f"{self._root(run)}:{call.args.get('payment_id')}:{call.args.get('amount')}"
+        err = validate(tool, call.args)
         if err:
-            return self._tool_step(run_id, call_id, name, args, reason, "error", error=err)
-        blocked = guard(name, args, ctx)
+            return self._record(call, "error", error=err)
+        blocked = guard(call.name, call.args, ctx)
         if blocked:
-            return self._tool_step(run_id, call_id, name, args, reason, "blocked", error=f"blocked by policy: {blocked}")
-
+            return self._record(call, "blocked", error=f"blocked by policy: {blocked}")
         approval = None
         if tool.get("risk") == "high":
-            approval = self.store.get_approval(run_id, call_id) or self.store.request_approval(run_id, call_id, name, args, reason)
-            if not any(s["kind"] == "approval" and s["data"]["call_id"] == call_id for s in steps):
-                self.store.add_step(run_id, "approval", {"call_id": call_id, "name": name, "args": args, "reason": reason,
-                                                         "status": "pending"})
+            approval = self._approval_gate(call, steps)
             if approval["status"] == "pending":
-                self.store.update_run(run_id, status="awaiting_approval")
                 return "paused"
             if approval["status"] == "rejected":
-                note = approval.get("note") or "no note"
-                return self._tool_step(run_id, call_id, name, args, reason, "rejected", approval=approval,
-                                       error=f"A human reviewer REJECTED this action. Reviewer note: {note}. "
-                                             f"Do not retry it; adapt your plan.")
-        t = time.perf_counter()
-        retry_safe = bool(tool.get("idempotent")) or "idempotency_key" in args
+                return self._record(call, "rejected", approval=approval,
+                                    error=f"A human reviewer REJECTED this action. Reviewer note: "
+                                          f"{approval.get('note') or 'no note'}. Do not retry it; adapt your plan.")
+        return self._execute(call, tool, gateway, ctx, steps, approval)
+
+    def _finish(self, call: Call) -> str:
+        err = validate({"name": "finish", "params": FINISH["function"]["parameters"]}, call.args)
+        if err:
+            return self._record(call, "error", error=err)
+        self._record(call, "ok", result={"ok": True})
+        self._end(call.run_id, call.args["status"], call.args["summary"])
+        return "ended"
+
+    def _approval_gate(self, call: Call, steps: list[dict]) -> dict:
+        """Get (or open) the approval record for this exact call. Pending -> the run parks until a human decides."""
+        approval = (self.store.get_approval(call.run_id, call.id)
+                    or self.store.request_approval(call.run_id, call.id, call.name, call.args, call.reason))
+        if not _has_step(steps, "approval", call.id):
+            self.store.add_step(call.run_id, "approval", {"call_id": call.id, "name": call.name, "args": call.args,
+                                                          "reason": call.reason, "status": "pending"})
+        if approval["status"] == "pending":
+            self.store.update_run(call.run_id, status="awaiting_approval")
+        return approval
+
+    def _execute(self, call: Call, tool: dict, gateway: Gateway, ctx: RunContext, steps: list[dict],
+                 approval: dict | None) -> str:
+        retry_safe = bool(tool.get("idempotent")) or "idempotency_key" in call.args
         if not retry_safe:
             # Write-ahead intent: if we crash after the world acts but before the result is saved, the resumed run
-            # finds this intent and checks the audit log instead of sending the email / note a second time.
-            if any(s["kind"] == "intent" and s["data"]["call_id"] == call_id for s in steps):
+            # finds the intent and checks the audit log instead of sending the email / note a second time.
+            if _has_step(steps, "intent", call.id):
                 attempts: list[dict] = []
-                if gateway.already_in_audit(name, args, attempts):
-                    return self._tool_step(run_id, call_id, name, args, reason, "ok", approval=approval, attempts=attempts,
-                                           result={"ok": True, "confirmed_via_audit": True, "recovered_after_restart": True})
+                landed = gateway.already_in_audit(call.name, call.args, attempts)
+                if landed is True:
+                    return self._record(call, "ok", approval=approval, attempts=attempts,
+                                        result={"ok": True, "confirmed_via_audit": True, "recovered_after_restart": True})
+                if landed is None:  # can't tell if it already happened: never risk doing it twice
+                    return self._record(call, "error", approval=approval, attempts=attempts,
+                                        error=f"{call.name} may already have run before a restart and the audit log "
+                                              f"could not confirm it. Do not repeat it; escalate to a human.")
             else:
-                self.store.add_step(run_id, "intent", {"call_id": call_id, "name": name, "args": args})
+                self.store.add_step(call.run_id, "intent", {"call_id": call.id, "name": call.name, "args": call.args})
+        t = time.perf_counter()
         try:
-            out = gateway.execute(name, args, approval)
-        except ApprovalRequired as e:  # defence in depth: should be unreachable
-            return self._tool_step(run_id, call_id, name, args, reason, "blocked", error=str(e))
-        latency = (time.perf_counter() - t) * 1000
+            out = gateway.execute(call.name, call.args, approval)
+        except ApprovalRequired as e:  # defence in depth: unreachable while the gate above is correct
+            return self._record(call, "blocked", error=str(e))
         if out.ok:
-            ctx.observe(name, args, out.result)
-        return self._tool_step(run_id, call_id, name, args, reason, "ok" if out.ok else "error", result=out.result,
-                               error=out.error, attempts=out.attempts, approval=approval, latency_ms=latency)
+            ctx.observe(call.name, call.args, out.result)
+        return self._record(call, "ok" if out.ok else "error", result=out.result, error=out.error,
+                            attempts=out.attempts, approval=approval, latency_ms=(time.perf_counter() - t) * 1000)
 
-    def _tool_step(self, run_id: str, call_id: str, name: str, args: dict, reason: str, status: str, result=None,
-                   error: str | None = None, attempts: list | None = None, approval: dict | None = None,
-                   latency_ms: float | None = None) -> str:
-        content = {"tool": name, "status": status}
+    def _record(self, call: Call, status: str, result=None, error: str | None = None, attempts: list | None = None,
+                approval: dict | None = None, latency_ms: float | None = None) -> str:
+        """Save the tool step, and the message the model sees next (results are labelled as untrusted data)."""
+        content = {"tool": call.name, "status": status}
         if result is not None:
             content["data_untrusted"] = result
         if error:
             content["error"] = error
-        msg = {"role": "tool", "tool_call_id": call_id, "content": json.dumps(content)}
-        appr = {k: approval[k] for k in ("status", "note", "decided_at")} if approval else None
-        self.store.add_step(run_id, "tool", {"call_id": call_id, "name": name, "args": args, "reason": reason,
-                                             "status": status, "result": result, "error": error,
-                                             "attempts": attempts or [], "approval": appr},
-                            msg=msg, latency_ms=round(latency_ms, 1) if latency_ms is not None else None)
+        msg = {"role": "tool", "tool_call_id": call.id, "content": json.dumps(content)}
+        self.store.add_step(call.run_id, "tool", {
+            "call_id": call.id, "name": call.name, "args": call.args, "reason": call.reason, "status": status,
+            "result": result, "error": error, "attempts": attempts or [],
+            "approval": {k: approval[k] for k in ("status", "note", "decided_at")} if approval else None,
+        }, msg=msg, latency_ms=round(latency_ms, 1) if latency_ms is not None else None)
         return "done"
 
     def _root(self, run: dict) -> str:

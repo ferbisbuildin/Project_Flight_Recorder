@@ -1,8 +1,6 @@
 """Offline tests: no API key, no world server. Each one targets a failure that would hurt Northwind."""
 from __future__ import annotations
 
-import json
-
 import pytest
 
 from flightrec.config import Budget, Settings
@@ -85,7 +83,7 @@ def test_rejection_is_fed_back_to_the_agent(tmp_path):
 def test_refund_lost_response_is_never_paid_twice(tmp_path):
     """The double refund: money moves, the world answers 504, a naive retry pays again."""
     world = FakeWorld({"refund_payment": ["504_after"]})
-    store, runner = Store(tmp_path / "db.sqlite"), Runner(Store(tmp_path / "db.sqlite"))
+    runner = Runner(Store(tmp_path / "db.sqlite"))
     llm = ScriptedLLM(refund_script())
     rid = runner.start("T-101", "Handle support ticket T-101 end to end.", deps(llm, world))
     [a] = runner.store.approvals(rid, status="pending")

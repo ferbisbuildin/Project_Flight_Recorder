@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import sqlite3
 import threading
 import time
@@ -33,6 +34,7 @@ CREATE TABLE IF NOT EXISTS approvals (
 """
 
 TERMINAL = {"succeeded", "failed", "stopped", "needs_human"}
+TASK_ID = re.compile(r"T-\d{1,6}")
 
 
 def args_hash(args: dict) -> str:
@@ -52,6 +54,8 @@ class Store:
 
     # ---------------------------------------------------------------- runs
     def create_run(self, task_id: str, goal: str, model: str, mode: str = "live", replay_of: str | None = None) -> str:
+        if not TASK_ID.fullmatch(task_id or ""):
+            raise ValueError(f"invalid task id {task_id!r}: expected e.g. T-101")
         run_id = time.strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:6]
         with self._lock:
             self._db.execute("INSERT INTO runs (id, task_id, goal, status, model, mode, replay_of, created_at) "

@@ -76,7 +76,9 @@ class Service:
         paths = []
         for rid in run_ids:
             run = self.store.get_run(rid)
-            p = out / f"{run['task_id']}_{rid}.json"
+            p = (out / f"{run['task_id']}_{rid}.json").resolve()
+            if p.parent != out.resolve():  # task ids are validated on create; this guards the path as well
+                raise ValueError(f"refusing to write outside {out}: {p}")
             p.write_text(json.dumps({"run": run, "steps": self.store.steps(rid), "approvals": self.store.approvals(rid)},
                                     indent=2), encoding="utf-8")
             paths.append(p)
