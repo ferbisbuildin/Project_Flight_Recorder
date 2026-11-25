@@ -51,10 +51,34 @@ class Service:
         deps = self.replay_deps(run["replay_of"]) if run["mode"] == "replay" else self.live_deps(run["model"])
         return self.runner.advance(run_id, deps)
 
-    def decide(self, run_id: str, call_id: str, approve: bool, note: str = "") -> dict:
+    def follow_up(self, run_id: str, guidance: str) -> str:
+        """A person answers an escalation: start a NEW run for the same ticket, with the escalation and their guidance
+        in its instructions. (A new run, not an edited old one, so both traces still replay exactly.)"""
+        old = self.store.get_run(run_id)
+        if old is None:
+            raise KeyError(run_id)
+        if old["status"] not in ("needs_human", "failed", "stopped"):
+            raise ValueError("only escalated, failed or stopped runs can be handed back")
+        if not guidance.strip():
+            raise ValueError("write the guidance for the agent")
+        goal = (f"Handle support ticket {old['task_id']} end to end.\n\n"
+                f"A previous run ({run_id}) ended '{old['status']}': {old['summary']}\n"
+                f"Its internal notes are on the ticket.\n\n"
+                f"Guidance from a Northwind support lead (trusted, follow it): {guidance.strip()}")
+        new = self.create_live(old["task_id"], goal, old["model"] if old["model"] in self.models else None)
+        self.store.add_step(run_id, "handoff", {"guidance": guidance.strip(), "follow_up": new})
+        return new
+
+    def mark_handled(self, run_id: str, note: str) -> None:
+        """A person resolved an escalation themselves; recorded on the run (the agent's own status is unchanged)."""
+        if not self.store.get_run(run_id):
+            raise KeyError(run_id)
+        self.store.add_step(run_id, "handled", {"note": note.strip() or "handled by a person"})
+
+    def decide(self, run_id: str, call_id: str, decision: bool | str, note: str = "") -> dict:
         if self.store.kill_state():
             raise RunBusy("the kill switch is engaged; no approvals until it is released")
-        return self.store.decide(run_id, call_id, approve, note)
+        return self.store.decide(run_id, call_id, decision, note)
 
     # ------------------------------------------------------------ kill switch
     def kill_all(self, reason: str = "") -> list[str]:
@@ -117,8 +141,8 @@ class Service:
         run_id = self.store.create_run(orig["task_id"], orig["goal"], "replay", mode="replay", replay_of=original_id)
         for a in self.store.approvals(original_id):  # ...and the human decisions that trace actually reflects
             self.store.request_approval(run_id, a["call_id"], a["tool"], a["args"], a["reason"] or "")
-            if a["status"] != "pending" and a["call_id"] in acted_on:
-                self.store.decide(run_id, a["call_id"], a["status"] == "approved", a["note"] or "")
+            if a["status"] in ("approved", "rejected", "changes_requested") and a["call_id"] in acted_on:
+                self.store.decide(run_id, a["call_id"], a["status"], a["note"] or "")
         self.runner.advance(run_id, deps)
         return {"run_id": run_id, **compare(self.store, original_id, run_id)}
 

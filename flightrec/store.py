@@ -36,6 +36,7 @@ CREATE TABLE IF NOT EXISTS controls (key TEXT PRIMARY KEY, value TEXT NOT NULL, 
 
 TERMINAL = {"succeeded", "failed", "stopped", "needs_human"}
 TASK_ID = re.compile(r"T-\d{1,6}")
+DECISIONS = {"approved", "rejected", "changes_requested"}
 
 
 def args_hash(args: dict) -> str:
@@ -121,10 +122,17 @@ class Store:
                              "VALUES (?,?,?,?,?,?,'pending',?)", (run_id, call_id, tool, json.dumps(args), args_hash(args), reason, time.time()))
         return self.get_approval(run_id, call_id)
 
-    def decide(self, run_id: str, call_id: str, approve: bool, note: str = "") -> dict:
+    def decide(self, run_id: str, call_id: str, decision: bool | str, note: str = "") -> dict:
+        """decision: True/"approved" (run exactly these args), False/"rejected" (don't), or "changes_requested"
+        (don't run this version; the note goes back to the agent, which revises and asks again)."""
+        status = {True: "approved", False: "rejected"}.get(decision, decision) if isinstance(decision, bool) else decision
+        if status not in DECISIONS:
+            raise ValueError(f"decision must be one of {sorted(DECISIONS)}")
+        if status == "changes_requested" and not note.strip():
+            raise ValueError("say what should change: requesting changes needs a note")
         with self._lock:
             cur = self._db.execute("UPDATE approvals SET status=?, note=?, decided_at=? WHERE run_id=? AND call_id=? AND status='pending'",
-                                   ("approved" if approve else "rejected", note, time.time(), run_id, call_id))
+                                   (status, note, time.time(), run_id, call_id))
             if cur.rowcount == 0:
                 raise ValueError("no pending approval with that id")
         return self.get_approval(run_id, call_id)

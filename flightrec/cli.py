@@ -6,6 +6,7 @@
   approvals                           list pending approvals
   approve <run_id> <call_id> [note]   approve and continue the run
   reject  <run_id> <call_id> [note]   reject and continue the run
+  revise  <run_id> <call_id> <note>   request changes: nothing runs; the agent revises and asks again
   resume  <run_id>                    continue a run (e.g. after a restart)
   runs                                list runs
   show    <run_id>                    print a run's timeline
@@ -88,8 +89,9 @@ def main(argv: list[str] | None = None) -> int:
     elif cmd == "approvals":
         for p in svc.store.approvals(status="pending"):
             print(f"{p['run_id']} {p['call_id']} {p['tool']} {json.dumps(p['args'])}\n    why: {p['reason']}")
-    elif cmd in ("approve", "reject"):
-        svc.store.decide(rest[0], rest[1], cmd == "approve", " ".join(rest[2:]))
+    elif cmd in ("approve", "reject", "revise"):
+        decision = {"approve": "approved", "reject": "rejected", "revise": "changes_requested"}[cmd]
+        svc.decide(rest[0], rest[1], decision, " ".join(rest[2:]))
         svc.advance(rest[0])
         show(svc, rest[0])
     elif cmd == "resume":

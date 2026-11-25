@@ -1,6 +1,7 @@
 """Ananya's asks (CHANGES.md): company-wide billing limit across parallel runs, kill switch, cost in rupees, per-run model."""
 from __future__ import annotations
 
+import json
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -166,3 +167,41 @@ def test_model_is_chosen_per_run_from_an_allowlist(tmp_path):
     assert svc.store.get_run(svc.create_live("T-102", model="strong"))["model"] == "strong"
     with pytest.raises(ValueError):
         svc.create_live("T-103", model="gpt-anything")
+
+
+# ------------------------------------------------------------------------------------ reviewer notes, escalations
+def test_request_changes_sends_the_note_back_and_only_the_revised_version_runs(tmp_path):
+    svc = make_service(tmp_path)
+    world = FakeWorld()
+    llm = ScriptedLLM([[call("get_ticket", ticket_id="T-101")],
+                       [call("send_email", customer_id="C-01", subject="Refund", body="Refund done.")],
+                       [call("send_email", customer_id="C-01", subject="Refund", body="Hi! Sorry for the trouble, your refund is done.")],
+                       [call("finish", status="succeeded", summary="emailed")]])
+    rid = svc.runner.start("T-101", GOAL, deps(svc, llm, world))
+    [first] = svc.store.approvals(rid, status="pending")
+    with pytest.raises(ValueError):
+        svc.decide(rid, first["call_id"], "changes_requested", "")      # a change request must say what to change
+    svc.decide(rid, first["call_id"], "changes_requested", "make it more polite")
+    svc.runner.advance(rid, deps(svc, llm, world))
+    assert "make it more polite" in json.dumps(llm.seen[-1])            # the agent saw the note
+    [second] = svc.store.approvals(rid, status="pending")
+    assert second["args"]["body"].startswith("Hi! Sorry")
+    svc.decide(rid, second["call_id"], "approved", "thanks")
+    assert svc.runner.advance(rid, deps(svc, llm, world)) == "succeeded"
+    assert [e["body"] for e in world.executed("send_email")] == ["Hi! Sorry for the trouble, your refund is done."]
+    assert "thanks" in json.dumps(llm.seen[-1])                          # approve-with-note also reaches the agent
+
+
+def test_escalation_can_be_handed_back_with_guidance(tmp_path):
+    svc = make_service(tmp_path)
+    llm = ScriptedLLM([[call("get_ticket", ticket_id="T-101")],
+                       [call("finish", status="needs_human", summary="Asked to refund another account.")]])
+    rid = svc.runner.start("T-101", GOAL, deps(svc, llm, FakeWorld()))
+    with pytest.raises(ValueError):
+        svc.follow_up(rid, "  ")
+    new = svc.follow_up(rid, "Decline politely; only the account owner can ask for that refund.")
+    goal = svc.store.get_run(new)["goal"]
+    assert "Asked to refund another account." in goal and "only the account owner" in goal
+    assert [s["kind"] for s in svc.store.steps(rid)][-1] == "handoff"
+    svc.mark_handled(rid, "called the customer")
+    assert svc.store.steps(rid)[-1]["data"]["note"] == "called the customer"

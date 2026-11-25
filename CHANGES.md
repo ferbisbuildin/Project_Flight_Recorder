@@ -71,3 +71,13 @@ have no evaluation data yet to set the threshold. What I'd do next:
 
 ---
 
+## 14:50 · Feedback from the operator testing the viewer
+
+| Feedback | What I did | Why |
+|---|---|---|
+| "I wrote 'make it polite' in the approval note, and the email went out unchanged" | Added **Request changes** next to Approve and Reject. Nothing runs; the note goes back to the agent, which revises and asks again. Approve still runs **exactly** the arguments shown, and its note is passed to the agent too | An approval must cover exactly what the person saw. If a note could silently change the action, the approval wouldn't mean anything |
+| "A *needs human* run shows no options" | Escalated, failed and stopped runs now show the reason, the notes the agent left, and two actions. **Hand back to agent** starts a follow-up run with your guidance. **Mark handled by me** records that a person resolved it | A follow-up is a new run instead of an edited old one, so every trace still replays exactly |
+| Dark theme | A toggle in the top bar, remembered per browser | — |
+| Security review: DNS rebinding and cross-site POSTs to the local viewer | Only requests addressed to `localhost` / `127.0.0.1` are accepted, and state-changing requests from another site are refused (tested) | The viewer has no login, so the browser is the attack path |
+| Suggestion: rebuild the viewer on CopilotKit | **Not today** | It's a React framework with its own agent runtime. That means a build step, and the brief rules out agent frameworks for the loop. It's a good fit later for a "why did this run escalate?" chat over the traces |
+>>>>>>> 1c6c11c (Add request-changes approvals, escalation hand-back, dark theme; block cross-site and rebinding requests)

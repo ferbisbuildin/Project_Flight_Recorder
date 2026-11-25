@@ -5,8 +5,13 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+import os
+from typing import Literal
+from urllib.parse import urlparse
+
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
 from .config import settings
@@ -34,6 +39,20 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(title="Flight Recorder", lifespan=lifespan)
 
+# The viewer has no login and is meant for this machine only. Two cheap locks against a hostile web page:
+# 1) only answer requests addressed to a local host name (blocks DNS rebinding)
+ALLOWED_HOSTS = [h.strip() for h in os.environ.get("ALLOWED_HOSTS", "localhost,127.0.0.1,[::1]").split(",") if h.strip()]
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=ALLOWED_HOSTS)
+
+
+# 2) refuse state-changing requests sent by another site (a cross-site form or fetch to localhost)
+@app.middleware("http")
+async def same_origin_writes(request: Request, call_next):
+    origin = request.headers.get("origin")
+    if request.method != "GET" and origin and urlparse(origin).netloc != request.headers.get("host"):
+        return JSONResponse({"detail": "cross-site request refused"}, status_code=403)
+    return await call_next(request)
+
 
 class StartRun(BaseModel):
     task_id: str
@@ -44,8 +63,12 @@ class Kill(BaseModel):
     reason: str = ""
 
 
+class Guidance(BaseModel):
+    guidance: str = ""
+
+
 class Decision(BaseModel):
-    approve: bool
+    decision: Literal["approved", "rejected", "changes_requested"]
     note: str = ""
 
 
@@ -103,6 +126,30 @@ def start(body: StartRun) -> dict:
     return {"run_id": rid}
 
 
+@app.post("/api/runs/{run_id}/follow-up")
+def follow_up(run_id: str, body: Guidance) -> dict:
+    """Answer an escalation: a new run for the same ticket, carrying the person's guidance."""
+    try:
+        rid = svc.follow_up(run_id, body.guidance)
+    except KeyError:
+        raise HTTPException(404, "no such run")
+    except (ValueError, LLMError) as e:
+        raise HTTPException(400, str(e))
+    except RunBusy as e:
+        raise HTTPException(409, str(e))
+    advance_later(rid)
+    return {"run_id": rid}
+
+
+@app.post("/api/runs/{run_id}/handled")
+def handled(run_id: str, body: Guidance) -> dict:
+    try:
+        svc.mark_handled(run_id, body.guidance)
+    except KeyError:
+        raise HTTPException(404, "no such run")
+    return {"ok": True}
+
+
 @app.post("/api/runs/{run_id}/resume")
 def resume(run_id: str) -> dict:
     if not svc.store.get_run(run_id):
@@ -129,7 +176,7 @@ def approvals(status: str | None = "pending") -> list[dict]:
 @app.post("/api/approvals/{run_id}/{call_id}")
 def decide(run_id: str, call_id: str, body: Decision) -> dict:
     try:
-        a = svc.decide(run_id, call_id, body.approve, body.note.strip())
+        a = svc.decide(run_id, call_id, body.decision, body.note.strip())
     except (ValueError, RunBusy) as e:
         raise HTTPException(409, str(e))
     advance_later(run_id)

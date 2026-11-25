@@ -11,8 +11,18 @@
   --ok: #12936b; --ok-bg: #e7f7f0; --err: #d93a3a; --err-bg: #fdecec; --warn: #d97706; --warn-bg: #fef4e4;
   --wait: #3d6fe0; --wait-bg: #e9f0fe;
   --l-agent: #7c6cf2; --l-read: #3d8be0; --l-act: #14a38b; --l-risk: #c2417a; --l-human: #5b5bd6; --l-end: #1d2433;
+  --panel-2: #fcfcfe;
   --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace; --r: 12px;
 }
+:root[data-theme=dark] {
+  --bg: #0e1118; --panel: #161a24; --panel-2: #131722; --ink: #e6e9f2; --sub: #a3acbf; --faint: #6f7890; --line: #262c3a;
+  --soft: #1c2130; --brand: #7b7bf0; --brand-2: #9a8cff; --brand-bg: #23264a;
+  --ok: #3fcf98; --ok-bg: #11322a; --err: #ff6b6b; --err-bg: #3a1a1e; --warn: #f5a524; --warn-bg: #3a2a12;
+  --wait: #6d9bff; --wait-bg: #172447; --l-end: #c9cfdd;
+}
+:root[data-theme=dark] .why { color: var(--ink); }
+:root[data-theme=dark] textarea, :root[data-theme=dark] select:not(#task) { background: var(--soft); color: var(--ink); }
+:root[data-theme=dark] .btn.no { border-color: #6b2b31; }
 * { box-sizing: border-box; }
 html, body { height: 100%; }
 body { margin: 0; font: 13.5px/1.45 Inter, "Segoe UI", system-ui, -apple-system, sans-serif; color: var(--ink); background: var(--bg); }
@@ -28,7 +38,7 @@ button { font: inherit; cursor: pointer; }
 .pill { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; white-space: nowrap; }
 .pill.meta { background: var(--soft); color: var(--sub); font-weight: 500; border: 1px solid var(--line); }
 .grow { flex: 1; }
-.btn { border: 1px solid var(--line); background: #fff; color: var(--ink); border-radius: 9px; padding: 7px 14px; font-weight: 600; white-space: nowrap; }
+.btn { border: 1px solid var(--line); background: var(--panel); color: var(--ink); border-radius: 9px; padding: 7px 14px; font-weight: 600; white-space: nowrap; }
 .btn:hover { background: var(--soft); }
 .btn.primary { background: var(--brand); border-color: var(--brand); color: #fff; }
 .btn.primary:hover { background: #4b4bc7; }
@@ -42,7 +52,7 @@ button { font: inherit; cursor: pointer; }
 /* ---------- status pills */
 .s-succeeded, .s-ok, .s-approved { color: var(--ok); background: var(--ok-bg); }
 .s-failed, .s-error, .s-rejected { color: var(--err); background: var(--err-bg); }
-.s-stopped, .s-blocked, .s-needs_human { color: var(--warn); background: var(--warn-bg); }
+.s-stopped, .s-blocked, .s-needs_human, .s-changes_requested, .s-cancelled { color: var(--warn); background: var(--warn-bg); }
 .s-running, .s-awaiting_approval, .s-pending { color: var(--wait); background: var(--wait-bg); }
 .dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; display: inline-block; }
 .s-running .dot, .s-awaiting_approval .dot, .s-pending .dot { animation: pulse 1.2s infinite; }
@@ -52,14 +62,14 @@ button { font: inherit; cursor: pointer; }
 .body { flex: 1; min-height: 0; display: grid; grid-template-columns: 280px 1fr 360px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; }
 .col { min-height: 0; overflow: auto; }
 .col.left { border-right: 1px solid var(--line); padding: 14px; }
-.col.right { border-left: 1px solid var(--line); padding: 14px; background: #fcfcfe; }
+.col.right { border-left: 1px solid var(--line); padding: 14px; background: var(--panel-2); }
 .label { font-size: 11.5px; font-weight: 700; color: var(--sub); text-transform: uppercase; letter-spacing: .5px; margin: 4px 0 8px; }
 
 /* ---------- run list */
 .filters { display: flex; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; }
-.filters button { border: 1px solid var(--line); background: #fff; border-radius: 999px; padding: 3px 10px; font-size: 12px; color: var(--sub); }
+.filters button { border: 1px solid var(--line); background: var(--panel); border-radius: 999px; padding: 3px 10px; font-size: 12px; color: var(--sub); }
 .filters button.on { background: var(--brand-bg); color: var(--brand); border-color: #d4d4f7; font-weight: 600; }
-.run { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; cursor: pointer; background: #fff; transition: border-color .15s, box-shadow .15s; }
+.run { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; cursor: pointer; background: var(--panel); transition: border-color .15s, box-shadow .15s; }
 .run:hover { border-color: #cfd2f3; }
 .run.sel { border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-bg); }
 .run .r1 { display: flex; align-items: center; gap: 8px; }
@@ -74,7 +84,7 @@ button { font: inherit; cursor: pointer; }
 .head .who { min-width: 0; }
 .head .who b { display: block; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .head .who span { color: var(--sub); font-size: 12.5px; }
-.stats { display: flex; gap: 30px; padding: 10px 18px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); background: #fcfcfe; flex-wrap: wrap; }
+.stats { display: flex; gap: 30px; padding: 10px 18px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); background: var(--panel-2); flex-wrap: wrap; }
 .stats div b { display: block; font-size: 15px; }
 .stats div span { color: var(--faint); font-size: 11px; text-transform: uppercase; letter-spacing: .4px; }
 .banner { margin: 12px 18px 0; padding: 10px 14px; border-radius: 10px; font-size: 13px; display: flex; gap: 10px; align-items: flex-start; }
@@ -82,13 +92,13 @@ button { font: inherit; cursor: pointer; }
 
 /* ---------- flight path chart */
 .chartbox { margin: 12px 18px 0; border: 1px solid var(--line); border-radius: 12px; background: var(--soft); }
-.chartbar { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--line); background: #fff; border-radius: 12px 12px 0 0; }
+.chartbar { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--line); background: var(--panel); border-radius: 12px 12px 0 0; }
 .chartbar .title { font-weight: 700; }
-.ctrl { width: 30px; height: 30px; border-radius: 8px; border: 1px solid var(--line); background: #fff; display: grid; place-items: center; color: var(--ink); }
+.ctrl { width: 30px; height: 30px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); display: grid; place-items: center; color: var(--ink); }
 .ctrl.play { background: var(--brand); border-color: var(--brand); color: #fff; }
 .ctrl svg { width: 14px; height: 14px; }
 input[type=range] { accent-color: var(--brand); width: 160px; }
-.speed { border: 1px solid var(--line); border-radius: 8px; padding: 4px 6px; background: #fff; font: inherit; }
+.speed { border: 1px solid var(--line); border-radius: 8px; padding: 4px 6px; background: var(--panel); font: inherit; }
 .chart { overflow-x: auto; overflow-y: hidden; }
 .chart svg { display: block; }
 .lane-name { font: 700 10.5px Inter, "Segoe UI", sans-serif; text-transform: uppercase; letter-spacing: .5px; }
@@ -117,7 +127,7 @@ input[type=range] { accent-color: var(--brand); width: 160px; }
 .item .m { color: var(--faint); font-size: 11.5px; font-family: var(--mono); text-align: right; }
 
 /* ---------- inspector */
-.card { background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; margin-bottom: 12px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; margin-bottom: 12px; }
 .card.approve { border-color: #cdd8fb; box-shadow: 0 0 0 3px var(--wait-bg); }
 .card h3 { margin: 0 0 6px; font-size: 13.5px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .why { background: var(--soft); border-radius: 8px; padding: 8px 10px; color: #39425a; font-size: 12.5px; margin: 8px 0; }
@@ -133,7 +143,9 @@ pre { margin: 6px 0 0; padding: 8px 10px; background: var(--soft); border: 1px s
 .attempt .bar { height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; }
 .attempt .bar i { display: block; height: 100%; border-radius: 3px; }
 textarea { width: 100%; font: inherit; border: 1px solid var(--line); border-radius: 8px; padding: 7px 9px; resize: vertical; margin: 8px 0; }
-.row { display: flex; gap: 8px; align-items: center; }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.hint { color: var(--faint); font-size: 11.5px; margin-top: 8px; }
+.card.escalate { border-color: #f3d19c; box-shadow: 0 0 0 3px var(--warn-bg); }
 .empty { color: var(--faint); text-align: center; padding: 60px 20px; }
 .toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); background: var(--ink); color: #fff; padding: 10px 16px; border-radius: 10px; display: none; z-index: 9; box-shadow: 0 8px 24px rgba(0,0,0,.18); }
 </style>
@@ -147,6 +159,7 @@ textarea { width: 100%; font: inherit; border: 1px solid var(--line); border-rad
     <span class="grow"></span>
     <span class="pill meta" id="today" title="Estimated LLM cost of today's live runs"></span>
     <span class="pill s-pending" id="pending-pill" style="display:none"><span class="dot"></span><span id="pending-n"></span></span>
+    <button class="btn" id="theme" title="Light / dark theme" aria-label="Toggle theme">◐</button>
     <button class="btn no" id="kill" title="Kill switch: stop every agent at its next safe point">Stop all agents</button>
     <select id="model" class="btn" aria-label="Model" title="Model for the next run"></select>
     <div class="split"><button class="btn primary" id="start">Start run</button><select id="task" aria-label="Task"></select></div>
@@ -181,7 +194,8 @@ const ms = v => v == null ? "–" : v >= 1000 ? (v / 1000).toFixed(1) + "s" : Ma
 const clock = t => t ? new Date(t * 1000).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit", second: "2-digit"}) : "";
 const STATUS = {succeeded: "Succeeded", failed: "Failed", stopped: "Stopped (budget)", needs_human: "Needs human",
                 running: "Running", awaiting_approval: "Awaiting approval", ok: "OK", error: "Error", blocked: "Blocked",
-                rejected: "Rejected", approved: "Approved", pending: "Pending"};
+                rejected: "Rejected", approved: "Approved", pending: "Pending", changes_requested: "Changes requested",
+                cancelled: "Cancelled"};
 const inr = usd => "₹" + (usd * (state.usdInr || 84)).toFixed(2);
 const pill = s => `<span class="pill s-${esc(s)}"><span class="dot"></span>${esc(STATUS[s] || s)}</span>`;
 const api = async (path, opts = {}) => {
@@ -206,7 +220,7 @@ const ACTS = new Set(["add_ticket_note", "close_ticket"]);
 const ABBR = {get_ticket: "TK", get_customer: "CU", list_payments: "PY", search_kb: "KB", search_tickets: "TS",
               add_ticket_note: "NT", close_ticket: "CL", refund_payment: "₹", send_email: "@"};
 const STATUS_COLOR = {ok: "var(--ok)", error: "var(--err)", rejected: "var(--err)", blocked: "var(--warn)",
-                      pending: "var(--wait)", approved: "var(--ok)", succeeded: "var(--ok)", failed: "var(--err)",
+                      pending: "var(--wait)", approved: "var(--ok)", changes_requested: "var(--warn)", cancelled: "var(--warn)", succeeded: "var(--ok)", failed: "var(--err)",
                       stopped: "var(--warn)", needs_human: "var(--warn)"};
 
 /* Turn raw trace steps into the events the chart and the activity list show. */
@@ -232,6 +246,9 @@ function toEvents(steps, approvals) {
                live: !a || a.status === "pending"});
     } else if (s.kind === "end") {
       ev.push({s, lane: "end", abbr: "■", status: d.status, title: "Run ended", sub: d.summary});
+    } else if (s.kind === "handoff" || s.kind === "handled") {
+      ev.push({s, lane: "human", abbr: "YOU", status: "ok", title: s.kind === "handoff" ? "Handed back with guidance" : "Handled by a person",
+               sub: d.guidance || d.note || ""});
     } else if (s.kind === "nudge") {
       ev.push({s, lane: "agent", abbr: "!", status: "blocked", title: "Agent replied without a tool", sub: "reminded to use tools"});
     }
@@ -240,6 +257,7 @@ function toEvents(steps, approvals) {
 }
 
 /* ---------- state */
+document.documentElement.dataset.theme = localStorage.getItem("theme") || "light";
 const state = {runs: [], filter: "runs", sel: new URLSearchParams(location.hash.slice(1)).get("run"),
                detail: null, events: [], cursor: -1, focus: -1, playing: false, speed: 1, key: "", checks: {}};
 
@@ -326,7 +344,7 @@ function renderChart() {
   let svg = `<svg width="${w}" height="${h}" xmlns="http://www.w3.org/2000/svg">`;
   LANES.forEach((l, i) => {
     const y = 18 + i * LH;
-    svg += `<rect x="0" y="${y}" width="${w}" height="${LH}" fill="${i % 2 ? "#fff" : "transparent"}" opacity=".6"/>`;
+    svg += `<rect x="0" y="${y}" width="${w}" height="${LH}" fill="${i % 2 ? "var(--panel)" : "transparent"}" opacity=".6"/>`;
     svg += `<circle cx="16" cy="${y + LH / 2}" r="4" fill="${l.color}"/><text class="lane-name" x="26" y="${y + LH / 2 + 4}" fill="${l.color}">${l.name}</text>`;
   });
   svg += `<line x1="${LW}" y1="10" x2="${LW}" y2="${h}" stroke="var(--line)"/>`;
@@ -346,7 +364,7 @@ function renderChart() {
     svg += `<g class="${cls}" data-i="${i}">
       <title>${esc(e.title)}${e.sub ? " — " + esc(String(e.sub).slice(0, 140)) : ""}</title>
       <circle class="halo" cx="${x}" cy="${y}" r="21" fill="var(--brand-bg)" stroke="var(--brand)" stroke-width="1.5"/>
-      <circle class="ring" cx="${x}" cy="${y}" r="15" fill="#fff" stroke="${col}" stroke-width="2.5"/>
+      <circle class="ring" cx="${x}" cy="${y}" r="15" fill="var(--panel)" stroke="${col}" stroke-width="2.5"/>
       <circle cx="${x}" cy="${y}" r="11" fill="${fill}"/>
       <text x="${x}" y="${y + 3.5}" text-anchor="middle" fill="#fff">${esc(e.abbr)}</text>
       ${e.status === "error" || e.status === "rejected" ? `<text x="${x + 12}" y="${y - 10}" fill="var(--err)" style="font-size:12px">✕</text>` : ""}
@@ -398,10 +416,13 @@ function renderInspector() {
       <h3>${pill("pending")} Approve <span class="mono">${esc(a.tool)}</span>?</h3>
       <div class="why">${esc(a.reason || "(no reason given)")}</div>
       ${kv(a.args)}
-      <textarea rows="2" id="note-${esc(a.call_id)}" placeholder="Note to the agent (optional)"></textarea>
-      <div class="row"><button class="btn ok" data-decide="1" data-call="${esc(a.call_id)}">Approve</button>
-        <button class="btn no" data-decide="0" data-call="${esc(a.call_id)}">Reject</button></div>
+      <textarea rows="2" id="note-${esc(a.call_id)}" placeholder="Note to the agent: needed for “Request changes”, e.g. make it more polite"></textarea>
+      <div class="row"><button class="btn ok" data-decide="approved" data-call="${esc(a.call_id)}" title="Run exactly what is shown">Approve</button>
+        <button class="btn" data-decide="changes_requested" data-call="${esc(a.call_id)}" title="Nothing runs; the agent revises using your note and asks again">Request changes</button>
+        <button class="btn no" data-decide="rejected" data-call="${esc(a.call_id)}" title="Nothing runs; the agent must take another approach">Reject</button></div>
+      <div class="hint">Approve runs exactly these arguments. To change them, use Request changes.</div>
     </div>`).join("");
+  html += escalationCard();
   const e = state.events[state.focus];
   if (!e) {
     html += `<div class="empty">Press ▶ to play the run, or click a step.</div>`;
@@ -432,6 +453,25 @@ function renderInspector() {
     html += `</div>`;
   }
   $("inspector").innerHTML = html;
+}
+
+function escalationCard() {
+  const {run: r, steps} = state.detail;
+  if (r.mode !== "live" || !["needs_human", "failed", "stopped"].includes(r.status)) return "";
+  const notes = steps.filter(s => s.kind === "tool" && s.data.name === "add_ticket_note" && s.data.status === "ok").map(s => s.data.args.note);
+  const after = steps.filter(s => s.kind === "handoff" || s.kind === "handled");
+  const title = {needs_human: "The agent escalated this ticket", failed: "This run failed", stopped: "This run was stopped"}[r.status];
+  return `<div class="card escalate">
+    <h3>${pill(r.status)} ${title}</h3>
+    <div class="why">${esc(r.summary || "")}</div>
+    ${notes.length ? `<div class="label" style="margin-top:10px">Internal notes it left</div>${notes.map(n => `<pre>${esc(n)}</pre>`).join("")}` : ""}
+    ${after.map(s => `<div class="kv"><dt>${s.kind === "handoff" ? "handed back" : "handled"}</dt><dd>${esc(s.data.guidance || s.data.note)}${s.data.follow_up ? ` → <a href="#run=${esc(s.data.follow_up)}" data-run="${esc(s.data.follow_up)}">follow-up run</a>` : ""}</dd></div>`).join("")}
+    <div class="label" style="margin-top:10px">What do you want to do?</div>
+    <textarea rows="3" id="guidance" placeholder="Guidance for the agent, e.g. “Decline politely: only the account owner can request a refund on their payment.”"></textarea>
+    <div class="row"><button class="btn primary" id="followup" title="Start a new run for this ticket with your guidance">Hand back to agent</button>
+      <button class="btn" id="handled" title="You resolved it yourself; record a note">Mark handled by me</button></div>
+    <div class="hint">Hand back starts a follow-up run for the same ticket with the escalation and your guidance. Risky actions still need approval.</div>
+  </div>`;
 }
 
 /* ---------- playback */
@@ -495,8 +535,9 @@ document.addEventListener("click", async ev => {
     t.disabled = true;
     try {
       await api(`/api/approvals/${encodeURIComponent(state.sel)}/${encodeURIComponent(t.dataset.call)}`,
-                {method: "POST", body: JSON.stringify({approve: t.dataset.decide === "1", note})});
-      toast(t.dataset.decide === "1" ? "Approved. The run continues." : "Rejected. The agent has been told why.");
+                {method: "POST", body: JSON.stringify({decision: t.dataset.decide, note})});
+      toast({approved: "Approved. The run continues.", changes_requested: "Sent back. The agent will revise and ask again.",
+             rejected: "Rejected. The agent has been told why."}[t.dataset.decide]);
     } catch (e) { toast(e.message); t.disabled = false; }
     document.activeElement.blur(); state.key = ""; return refreshAll();
   }
@@ -512,6 +553,23 @@ document.addEventListener("click", async ev => {
         state.key = ""; await refreshAll(); play();
       } catch (e) { toast(e.message); t.disabled = false; t.textContent = "Verify replay"; }
       break;
+    case "followup": {
+      const guidance = $("guidance").value;
+      try { const {run_id} = await api(`/api/runs/${encodeURIComponent(state.sel)}/follow-up`, {method: "POST", body: JSON.stringify({guidance})});
+            toast("Follow-up run started with your guidance."); await refreshRuns(); select(run_id); }
+      catch (e) { toast(e.message); }
+      break;
+    }
+    case "handled": {
+      try { await api(`/api/runs/${encodeURIComponent(state.sel)}/handled`, {method: "POST", body: JSON.stringify({guidance: $("guidance").value})});
+            toast("Recorded as handled."); state.key = ""; await refreshAll(); }
+      catch (e) { toast(e.message); }
+      break;
+    }
+    case "theme": {
+      const next = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
+      document.documentElement.dataset.theme = next; localStorage.setItem("theme", next); break;
+    }
     case "kill": {
       const reason = prompt("Stop every agent now? Optional reason:", "");
       if (reason === null) break;

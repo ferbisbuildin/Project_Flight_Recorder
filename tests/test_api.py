@@ -21,7 +21,7 @@ def client(tmp_path, monkeypatch):
     svc.live_deps = lambda model=None: Deps(llm, world, Budget(), sleep=lambda s: None, jitter=False)
     monkeypatch.setattr(api, "svc", svc)
     monkeypatch.setattr(api, "advance_later", svc.advance)  # run synchronously in tests
-    with TestClient(api.app) as c:
+    with TestClient(api.app, base_url="http://localhost") as c:
         yield c, svc, world
 
 
@@ -39,10 +39,10 @@ def test_approve_from_the_api_resumes_the_run(client):
     svc.advance(rid)
     [pending] = c.get("/api/approvals").json()
     assert pending["tool"] == "refund_payment" and pending["args"]["payment_id"] == "PAY-2"
-    assert c.post(f"/api/approvals/{rid}/{pending['call_id']}", json={"approve": True, "note": "ok"}).status_code == 200
+    assert c.post(f"/api/approvals/{rid}/{pending['call_id']}", json={"decision": "approved", "note": "ok"}).status_code == 200
     detail = c.get(f"/api/runs/{rid}").json()
     assert detail["run"]["status"] == "succeeded" and len(world.refunds) == 1
-    assert c.post(f"/api/approvals/{rid}/{pending['call_id']}", json={"approve": True}).status_code == 409  # decided once
+    assert c.post(f"/api/approvals/{rid}/{pending['call_id']}", json={"decision": "approved"}).status_code == 409  # decided once
     replay = c.post(f"/api/runs/{rid}/replay").json()
     assert replay["identical"]
 
@@ -51,3 +51,10 @@ def test_bad_input_is_rejected(client):
     c, _, _ = client
     assert c.get("/api/runs/nope").status_code == 404
     assert c.post("/api/runs", json={"task_id": "../../etc"}).status_code == 400
+
+
+def test_hostile_pages_cannot_drive_the_api(client):
+    c, _, _ = client
+    assert c.post("/api/kill", json={"reason": "x"}, headers={"origin": "https://evil.example"}).status_code == 403
+    assert c.get("/api/config", headers={"host": "evil.example"}).status_code == 400  # DNS rebinding
+    assert c.post("/api/kill/release", headers={"origin": "http://localhost"}).status_code == 200
